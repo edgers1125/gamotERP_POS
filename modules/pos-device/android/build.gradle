@@ -1,0 +1,25 @@
+// Local Expo module (docs/plans/pos-android-app.md, package P-A1): the POS device key in the Android Keystore
+// (StrongBox when present), key attestation, ES256 signing, device facts and Play Integrity (standard request).
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.medsource.gamoterp.posdevice'
+version = '0.1.0'
+
+android {
+  namespace "com.medsource.gamoterp.posdevice"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // Play Integrity API — standard requests (StandardIntegrityManager). Pulls play-services-tasks transitively.
+  implementation 'com.google.android.play:integrity:1.6.0'
+}

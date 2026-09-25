@@ -39,3 +39,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# native module build output
+modules/*/android/build/
+
+# Android Studio
+.idea/

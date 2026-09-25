@@ -39,3 +39,15 @@ Docs: https://docs.expo.dev/eas/index.md
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## GamotERP POS — project rules (override the generic guidance above where they differ)
+
+- **Navigation is React Navigation (`@react-navigation/native-stack`), NOT Expo Router.** Screens live in `src/screens/`.
+- The plan and full contract: `../GamotERP/docs/plans/pos-android-app.md`; the backend API types: `@pos-api/contract`
+  (`../GamotERP/backend/src/pos-api/contract.ts`). Shared business logic comes from the backend, never re-implemented:
+  `@shared/material-issuance-pricing`, `@shared/discount`, `@shared/business-day`, `@shared/invoice-number`.
+- The app's internal module boundaries are in `src/contracts.ts` — implement the module you own to that interface.
+- Do NOT run `npm install` / `npx expo install` (several agents share this folder). If you need a package, say so in
+  your report.
+- Typecheck: `npx tsc --noEmit`. There is no Android SDK on this machine, so nothing here is built into an APK by the
+  agents — keep native code compile-clean by careful reading of the Expo Modules API docs for SDK 57.

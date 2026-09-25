@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "gamotERP_POS",
-    "slug": "gamotERP_POS",
+    "name": "GamotERP POS",
+    "slug": "gamoterp-pos",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "landscape",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
@@ -16,10 +16,42 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.medsource.gamoterp.pos",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "allowBackup": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 28,
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan product barcodes, enrollment QR codes and Senior/PWD IDs"
+        }
+      ]
+    ],
+    "extra": {
+      "note": "usesCleartextTraffic is for local development (http://10.0.2.2:4001). Release builds must use HTTPS with certificate pinning — see docs/plans/pos-android-app.md.",
+      "eas": {
+        "projectId": "54f0f22e-8dd5-4116-b33d-b01e89d5de15"
+      }
     }
   }
 }

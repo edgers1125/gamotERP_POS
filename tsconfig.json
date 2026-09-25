@@ -1,6 +1,16 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
-  }
+    "strict": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "paths": {
+      "@shared/*": ["../GamotERP/backend/src/lib/*"],
+      "@pos-api/*": ["../GamotERP/backend/src/pos-api/*"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../GamotERP/backend/src/pos-api/contract.ts", "../GamotERP/backend/src/lib/material-issuance-pricing.ts", "../GamotERP/backend/src/lib/discount.ts", "../GamotERP/backend/src/lib/business-day.ts", "../GamotERP/backend/src/lib/invoice-number.ts"],
+  "exclude": ["node_modules", "android", "ios"]
 }
