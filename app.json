@@ -3,7 +3,7 @@
     "name": "GamotERP POS",
     "slug": "gamoterp-pos",
     "version": "1.0.0",
-    "orientation": "landscape",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
@@ -45,7 +45,8 @@
         {
           "cameraPermission": "Scan product barcodes, enrollment QR codes and Senior/PWD IDs"
         }
-      ]
+      ],
+      "./plugins/withNoCameraCompatRotation"
     ],
     "extra": {
       "note": "usesCleartextTraffic is for local development (http://10.0.2.2:4001). Release builds must use HTTPS with certificate pinning — see docs/plans/pos-android-app.md.",

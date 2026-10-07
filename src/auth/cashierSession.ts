@@ -181,6 +181,12 @@ export const cashierSession: CashierSessionStore & CashierSessionExtras = {
       mode: 'ONLINE',
       token: res.cashier_token,
     };
+    // The cashier's brand (src/ui/brandSource.ts themes the app with it): cached BEFORE the cashier is set so the
+    // theme switches at once and an offline PIN unlock later restores it. The logo (needs the cashier token) is
+    // fetched by brandSource's refresh right after sign-in, only when its checksum is new. Older servers send no brand.
+    if (res.brand && typeof res.brand === 'object') {
+      await localStore.saveCashierBrand(cashier.userId, res.brand).catch(() => undefined);
+    }
     // Keep the offline snapshot (name/permissions) fresh when this cashier already has a PIN here.
     const existing = await localStore.getPinVerifier(cashier.userId);
     if (existing) {

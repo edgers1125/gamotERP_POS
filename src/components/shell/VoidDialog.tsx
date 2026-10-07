@@ -2,7 +2,7 @@
 // allowed offline; the co-signer's code is verified by the server against voided_at at sync). The VOID op is enqueued
 // through localStore.recordVoid (signed like every op) and a sync is kicked off right away.
 import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, ScrollView, Text, View } from 'react-native';
 
 import type { PosApprover, VoidPayload } from '@pos-api/contract';
 import { businessDate } from '@shared/business-day';
@@ -13,7 +13,9 @@ import { localStore } from '../../db/localStore';
 import { formatPeso } from '../../sale/money';
 import { syncEngine, useSyncStatus } from '../../sync/syncEngine';
 import { Banner, Button } from '../../ui/components';
-import { colors, font, radius, spacing } from '../../ui/theme';
+import { tillTouch } from '../sale/ui';
+import { makeStyles } from '../../ui/brandTheme';
+import { radius, shadow, spacing } from '../../ui/theme';
 import { ApprovalFields, approvalProblem, emptyApproval, type ApprovalValue } from './ApprovalFields';
 import { loadApprovers } from './approvers';
 import { errorMessage } from './format';
@@ -25,6 +27,7 @@ export interface VoidDialogProps {
 }
 
 export function VoidDialog({ sale, onClose, onVoided }: VoidDialogProps) {
+  const styles = useStyles();
   const cashier = useCashier((s) => s.cashier);
   const online = useSyncStatus((s) => s.online);
   const [approvers, setApprovers] = useState<PosApprover[]>([]);
@@ -79,7 +82,7 @@ export function VoidDialog({ sale, onClose, onVoided }: VoidDialogProps) {
 
   return (
     <Modal visible={!!sale} transparent animationType="fade" onRequestClose={saving ? () => undefined : onClose}>
-      <KeyboardAvoidingView behavior="height" style={styles.backdrop}>
+      <KeyboardAvoidingView behavior="height" style={styles.backdrop} onStartShouldSetResponderCapture={tillTouch}>
         <View style={styles.dialog}>
           <ScrollView keyboardShouldPersistTaps="handled">
             <Text style={styles.title}>Void sale {sale?.invoice_number}</Text>
@@ -115,19 +118,20 @@ export function VoidDialog({ sale, onClose, onVoided }: VoidDialogProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
+const useStyles = makeStyles((c, t) => ({
+  backdrop: { flex: 1, backgroundColor: c.backdrop, alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
   dialog: {
     width: '100%',
     maxWidth: 560,
     maxHeight: '100%',
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     borderRadius: radius.lg,
     padding: spacing.xl,
+    ...shadow.sheet,
   },
-  title: { fontSize: font.title, fontWeight: '700', color: colors.primary, marginBottom: spacing.xs },
-  subtitle: { fontSize: font.body, color: colors.text, marginBottom: spacing.md },
+  title: { ...t.title, marginBottom: spacing.xs },
+  subtitle: { ...t.body, color: c.muted, marginBottom: spacing.lg },
   gap: { marginBottom: spacing.md },
   buttons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
   flex: { flex: 1 },
-});
+}));

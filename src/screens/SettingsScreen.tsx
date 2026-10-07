@@ -2,12 +2,13 @@
 // cashier's offline PIN, and — only once the server has REVOKED this device — "Re-enroll", which clears the
 // enrollment and returns to the enrollment screen (the shell does the clearing: see App.tsx).
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useCallback, useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Alert, Text, View } from 'react-native';
 
 import type { PosBootstrap, PosCounters } from '@pos-api/contract';
 
 import type { RootStackParamList } from '../../App';
+import { isAttendanceOnlyTerminal, unsentPunchCount } from '../attendance/attendanceKiosk';
 import { cashierSession, useCashier } from '../auth/cashierSession';
 import { errorMessage, formatDateTime } from '../components/shell/format';
 import { appBuildNumber, appVersionName } from '../config/runtime';
@@ -15,8 +16,9 @@ import { serverConfig } from '../config/serverConfig';
 import type { EnrollmentState } from '../contracts';
 import { localStore } from '../db/localStore';
 import { syncEngine, useSyncStatus } from '../sync/syncEngine';
-import { Banner, Button, Card, Screen } from '../ui/components';
-import { colors, font, spacing } from '../ui/theme';
+import { Banner, Button, Screen } from '../ui/components';
+import { makeStyles, useThemeColors } from '../ui/brandTheme';
+import { radius, shadow, spacing } from '../ui/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'> & {
   /** Provided by the shell: clears the enrollment and shows the enrollment screen. */
@@ -30,6 +32,8 @@ function displayVersion(): string {
 }
 
 export function SettingsScreen({ onReEnroll }: Props) {
+  const styles = useStyles();
+  const c = useThemeColors();
   const status = useSyncStatus();
   const cashier = useCashier((s) => s.cashier);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
@@ -63,9 +67,9 @@ export function SettingsScreen({ onReEnroll }: Props) {
     setBusy(kind);
     setMessage(null);
     try {
-      if (kind === 'sync') await syncEngine.syncNow();
+      if (kind === 'sync') await syncEngine.syncNow({ checkVersions: true });
       else await syncEngine.refreshCatalog(true);
-      setMessage({ kind: 'success', text: kind === 'sync' ? 'Sync finished.' : 'Catalog refreshed.' });
+      setMessage({ kind: 'success', text: kind === 'sync' ? 'Check-in finished.' : 'Catalog refreshed.' });
     } catch (e) {
       setMessage({ kind: 'danger', text: errorMessage(e) });
     } finally {
@@ -74,14 +78,19 @@ export function SettingsScreen({ onReEnroll }: Props) {
     }
   };
 
-  const confirmReEnroll = () => {
+  const confirmReEnroll = async () => {
     const pending = status.pending;
+    // Unsent attendance punches are kept too, but they were signed by this (revoked) enrollment's key — say so.
+    const punches = await unsentPunchCount().catch(() => 0);
     Alert.alert(
       'Re-enroll this device?',
       'The enrollment, cached catalog, approver lists and offline PINs are cleared; you will need a new enrollment code from the Enroll POS page. ' +
         (pending > 0
-          ? `The ${pending} unsynced operation(s) stay on this device and are sent after re-enrollment — any the server can't accept will show as rejected for a manager.`
-          : 'Sales already on this device are kept.'),
+          ? `The ${pending} unsent operation(s) stay on this device and are sent after re-enrollment — any the server can't accept will show as rejected for a manager.`
+          : 'Sales already on this device are kept.') +
+        (punches > 0
+          ? ` ${punches} unsent attendance punch${punches === 1 ? '' : 'es'} also stay on this tablet with their photos, but the server can't accept punches signed before re-enrolling — they will be listed as "Not accepted" on the Attendance screen. Ask HR to enter those times by hand.`
+          : ''),
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -103,6 +112,8 @@ export function SettingsScreen({ onReEnroll }: Props) {
 
   const terminal = bootstrap?.terminal ?? enrollment?.terminal ?? null;
   const onlineSession = cashier?.mode === 'ONLINE' && cashierSession.isOnlineSession();
+  // An attendance-only tablet (docs/plans/attendance-pos-only.md): no catalog, invoice numbers, BIR details or cashier.
+  const attendanceOnly = isAttendanceOnlyTerminal(terminal);
 
   return (
     <Screen title="Settings">
@@ -111,62 +122,78 @@ export function SettingsScreen({ onReEnroll }: Props) {
         <Banner
           kind="danger"
           title="This device was revoked"
-          message="It can no longer sell or sync. Enroll it again with a new code from the Enroll POS page."
+          message="It can no longer sell or check in. Enroll it again with a new code from the Enroll POS page."
           actionLabel="Re-enroll"
-          onAction={confirmReEnroll}
+          onAction={() => void confirmReEnroll()}
           style={styles.gap}
         />
       ) : null}
 
       <View style={styles.columns}>
         <View style={styles.column}>
-          <Card title="Device">
+          <Group title="Device">
             <Line label="Server" value={baseUrl ?? '—'} />
             <Line label="Device id" value={enrollment ? String(enrollment.device_id) : '—'} />
             <Line label="Attestation" value={bootstrap?.device.attestation_level ?? '—'} />
             <Line label="Enrolled" value={formatDateTime(bootstrap?.device.enrolled_at ?? enrollment?.enrolled_at)} />
             <Line label="App version" value={displayVersion()} />
             {status.updateRequired ? (
-              <Line label="Required version" value={`${status.updateRequired} or newer`} color={colors.danger} />
+              <Line label="Required version" value={`${status.updateRequired} or newer`} color={c.danger} />
             ) : null}
-          </Card>
-          <Card title="Data">
-            <Line label="Catalog" value={catalogInfo ? `${catalogInfo.items} items · ${catalogInfo.version.slice(0, 12)}` : 'Not loaded'} />
-            <Line label="Catalog built" value={formatDateTime(catalogInfo?.generated_at)} />
-            <Line label="Next sale no." value={counters ? String(counters.next_invoice_number) : '—'} />
-            <Line label="Next return no." value={counters ? String(counters.next_return_number) : '—'} />
-            <Line label="Last sync" value={formatDateTime(status.lastSyncAt)} />
+          </Group>
+          <Group title="Data">
+            {attendanceOnly ? (
+              <Line label="Type" value="Attendance only — punches, no selling" />
+            ) : (
+              <>
+                <Line label="Catalog" value={catalogInfo ? `${catalogInfo.items} items · ${catalogInfo.version.slice(0, 12)}` : 'Not loaded'} />
+                <Line label="Catalog built" value={formatDateTime(catalogInfo?.generated_at)} />
+                <Line label="Next sale no." value={counters ? String(counters.next_invoice_number) : '—'} />
+                <Line label="Next return no." value={counters ? String(counters.next_return_number) : '—'} />
+              </>
+            )}
+            <Line label="Last check-in" value={formatDateTime(status.lastSyncAt)} />
             <View style={styles.buttons}>
-              <Button title="Sync now" onPress={() => run('sync')} loading={busy === 'sync'} disabled={!status.online || busy !== null} style={styles.flex} />
-              <Button
-                title="Refresh catalog"
-                variant="secondary"
-                onPress={() => run('catalog')}
-                loading={busy === 'catalog'}
-                disabled={!status.online || busy !== null}
-                style={styles.flex}
-              />
+              <Button title="Check in now" onPress={() => run('sync')} loading={busy === 'sync'} disabled={!status.online || busy !== null} style={styles.flex} />
+              {attendanceOnly ? null : (
+                <Button
+                  title="Refresh catalog"
+                  variant="secondary"
+                  onPress={() => run('catalog')}
+                  loading={busy === 'catalog'}
+                  disabled={!status.online || busy !== null}
+                  style={styles.flex}
+                />
+              )}
             </View>
-          </Card>
+          </Group>
         </View>
         <View style={styles.column}>
-          <Card title="Terminal">
+          <Group title="Terminal">
             {terminal ? (
               <>
                 <Line label="Terminal" value={`${terminal.name} (${terminal.code})`} />
                 <Line label="Branch" value={terminal.branch.name + (terminal.branch.branch_code ? ` (${terminal.branch.branch_code})` : '')} />
                 <Line label="Company" value={terminal.company.name} />
-                <Line label="Invoice prefix" value={terminal.invoice_prefix} />
-                <Line label="MIN" value={terminal.bir.min ?? '—'} />
-                <Line label="Serial no." value={terminal.bir.serial_number ?? '—'} />
-                <Line label="PTU" value={terminal.bir.ptu_number ?? '—'} />
-                <Line label="Offline limit" value={`${terminal.offline_max_hours} h / ${terminal.offline_max_sales} sales`} />
+                {attendanceOnly ? null : (
+                  <>
+                    <Line label="Invoice prefix" value={terminal.invoice_prefix} />
+                    <Line label="MIN" value={terminal.bir.min ?? '—'} />
+                    <Line label="Serial no." value={terminal.bir.serial_number ?? '—'} />
+                    <Line label="PTU" value={terminal.bir.ptu_number ?? '—'} />
+                  </>
+                )}
+                <Line
+                  label="Offline limit"
+                  value={terminal.offline_unlimited === true ? 'None' : `${terminal.offline_max_hours} h / ${terminal.offline_max_sales} sales`}
+                />
               </>
             ) : (
-              <Text style={styles.muted}>Not enrolled.</Text>
+              <Text style={styles.note}>Not enrolled.</Text>
             )}
-          </Card>
-          <Card title="Cashier">
+          </Group>
+          {attendanceOnly ? null : (
+          <Group title="Cashier">
             <Line label="Signed in" value={cashier ? `${cashier.name} (${cashier.mode === 'ONLINE' ? 'password' : 'PIN'})` : '—'} />
             <View style={styles.buttons}>
               <Button
@@ -178,10 +205,11 @@ export function SettingsScreen({ onReEnroll }: Props) {
               />
               <Button title="Sign out" variant="secondary" onPress={() => cashierSession.logout()} style={styles.flex} />
             </View>
-            {!onlineSession ? <Text style={styles.muted}>Sign in with your password to change your PIN.</Text> : null}
-          </Card>
+            {!onlineSession ? <Text style={styles.footnote}>Sign in with your password to change your PIN.</Text> : null}
+          </Group>
+          )}
           {status.revoked ? (
-            <Button title="Re-enroll this device" variant="danger" onPress={confirmReEnroll} loading={busy === 'reenroll'} />
+            <Button title="Re-enroll this device" variant="danger" onPress={() => void confirmReEnroll()} loading={busy === 'reenroll'} />
           ) : null}
         </View>
       </View>
@@ -189,7 +217,19 @@ export function SettingsScreen({ onReEnroll }: Props) {
   );
 }
 
+/** A settings-style group: white card, overline section title, rows separated by 1px dividers. */
+function Group({ title, children }: { title: string; children?: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.group}>
+      <Text style={styles.groupTitle}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
 function Line({ label, value, color }: { label: string; value: string; color?: string }) {
+  const styles = useStyles();
   return (
     <View style={styles.line}>
       <Text style={styles.lineLabel}>{label}</Text>
@@ -200,14 +240,39 @@ function Line({ label, value, color }: { label: string; value: string; color?: s
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((c, t) => ({
   gap: { marginBottom: spacing.md },
-  columns: { flexDirection: 'row', gap: spacing.md, flexWrap: 'wrap' },
+  columns: { flexDirection: 'row', gap: spacing.lg, flexWrap: 'wrap' },
   column: { flex: 1, minWidth: 320 },
-  line: { flexDirection: 'row', paddingVertical: spacing.xs },
-  lineLabel: { width: 150, color: colors.muted, fontSize: font.body },
-  lineValue: { flex: 1, color: colors.text, fontSize: font.body, fontWeight: '600' },
-  muted: { color: colors.muted, fontSize: font.small, marginTop: spacing.sm },
-  buttons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
+  group: {
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.border,
+    overflow: 'hidden',
+    marginBottom: spacing.lg,
+    ...shadow.card,
+  },
+  groupTitle: { ...t.overline, paddingTop: spacing.lg, paddingBottom: spacing.sm, paddingHorizontal: spacing.lg },
+  line: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
+  lineLabel: { ...t.label, width: 150 },
+  lineValue: { ...t.body, flex: 1, textAlign: 'right' },
+  note: { ...t.caption, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  footnote: { ...t.caption, paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, marginTop: -spacing.sm },
+  buttons: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
   flex: { flex: 1 },
-});
+}));

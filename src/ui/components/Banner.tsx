@@ -1,8 +1,11 @@
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useMemo } from 'react';
+import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { colors, font, radius, spacing } from '../theme';
+import { makeStyles, useThemeColors, type ThemeColors } from '../brandTheme';
+import { radius, spacing } from '../theme';
 import { Button } from './Button';
 
+// An MUI "standard" Alert: soft status background, a status-coloured title, body text in the normal text colour.
 export type BannerKind = 'info' | 'success' | 'warning' | 'danger';
 
 export interface BannerProps {
@@ -14,41 +17,44 @@ export interface BannerProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const tones: Record<BannerKind, { bg: string; border: string; fg: string }> = {
-  info: { bg: '#e8f0f8', border: colors.primary, fg: colors.primary },
-  success: { bg: '#eaf4e0', border: colors.success, fg: colors.success },
-  warning: { bg: '#fff4d6', border: colors.warning, fg: colors.warning },
-  danger: { bg: '#fbe9e7', border: colors.danger, fg: colors.danger },
-};
+const tonesOf = (c: ThemeColors): Record<BannerKind, { bg: string; fg: string }> => ({
+  info: { bg: c.infoSoft, fg: c.info },
+  success: { bg: c.successSoft, fg: c.success },
+  warning: { bg: c.warningSoft, fg: c.warning },
+  danger: { bg: c.dangerSoft, fg: c.danger },
+});
 
 export function Banner({ kind = 'info', title, message, actionLabel, onAction, style }: BannerProps) {
+  const styles = useStyles();
+  const c = useThemeColors();
+  const tones = useMemo(() => tonesOf(c), [c]);
   const t = tones[kind];
   return (
     <View
       accessibilityRole={kind === 'danger' || kind === 'warning' ? 'alert' : undefined}
-      style={[styles.banner, { backgroundColor: t.bg, borderColor: t.border }, style]}
+      style={[styles.banner, { backgroundColor: t.bg }, style]}
     >
+      <View style={[styles.mark, { backgroundColor: t.fg }]} />
       <View style={styles.text}>
         {title ? <Text style={[styles.title, { color: t.fg }]}>{title}</Text> : null}
-        <Text style={[styles.message, { color: colors.text }]}>{message}</Text>
+        <Text style={styles.message}>{message}</Text>
       </View>
       {actionLabel && onAction ? <Button title={actionLabel} onPress={onAction} variant="secondary" compact /> : null}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((_c, t) => ({
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderLeftWidth: 5,
-    borderRadius: radius.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
     gap: spacing.md,
   },
+  mark: { width: 4, alignSelf: 'stretch', borderRadius: radius.pill },
   text: { flex: 1 },
-  title: { fontSize: font.body, fontWeight: '700' },
-  message: { fontSize: font.small },
-});
+  title: { ...t.bodyStrong },
+  message: { ...t.body, fontSize: 14 },
+}));

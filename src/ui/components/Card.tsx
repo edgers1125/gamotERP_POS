@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { colors, font, radius, spacing } from '../theme';
+import { makeStyles } from '../brandTheme';
+import { radius, shadow, spacing } from '../theme';
 
+// An MUI Paper/Card: white surface, 1px divider border, 10px corners, a faint elevation — with a brand-green top edge
+// and title so sections don't read as plain white.
 export interface CardProps {
   title?: string;
   right?: ReactNode;
@@ -11,6 +14,7 @@ export interface CardProps {
 }
 
 export function Card({ title, right, children, style }: CardProps) {
+  const styles = useStyles();
   return (
     <View style={[styles.card, style]}>
       {title || right ? (
@@ -24,15 +28,18 @@ export function Card({ title, right, children, style }: CardProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((c, t) => ({
   card: {
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: c.border,
+    borderTopWidth: 3,
+    borderTopColor: c.primary,
     padding: spacing.lg,
     marginBottom: spacing.md,
+    ...shadow.card,
   },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
-  title: { fontSize: font.body, fontWeight: '700', color: colors.primary },
-});
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, marginBottom: spacing.md },
+  title: { ...t.heading, flexShrink: 1, color: c.primary },
+}));

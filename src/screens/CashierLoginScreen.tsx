@@ -2,7 +2,7 @@
 // unlock (pick a cashier who has set a PIN on this device). After an online sign-in without a PIN on this device, the
 // cashier must choose one before the till opens (also reachable later via Settings → Change offline PIN).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View, type TextInput } from 'react-native';
+import { KeyboardAvoidingView, Pressable, ScrollView, Text, View, type TextInput } from 'react-native';
 
 import {
   cashierSession,
@@ -15,22 +15,29 @@ import {
 import { errorMessage } from '../components/shell/format';
 import { localStore } from '../db/localStore';
 import { useSyncStatus } from '../sync/syncEngine';
-import { Banner, Button, Card, TextField } from '../ui/components';
-import { colors, font, radius, spacing } from '../ui/theme';
+import { Banner, Button, TextField } from '../ui/components';
+import { makeStyles } from '../ui/brandTheme';
+import { radius, shadow, spacing } from '../ui/theme';
 
 export interface CashierLoginScreenProps {
   terminalLabel?: string | null;
 }
 
 export function CashierLoginScreen({ terminalLabel }: CashierLoginScreenProps) {
+  const styles = useStyles();
   const pinSetupRequired = useCashier((s) => s.pinSetupRequired);
   return (
     <KeyboardAvoidingView behavior="height" style={styles.root}>
       <ScrollView contentContainerStyle={styles.center} keyboardShouldPersistTaps="handled">
         <View style={styles.panel}>
-          <Text style={styles.brand}>GamotERP POS</Text>
-          {terminalLabel ? <Text style={styles.terminal}>{terminalLabel}</Text> : null}
-          {pinSetupRequired ? <PinSetup /> : <SignIn />}
+          <View style={styles.strip} />
+          <View style={styles.panelBody}>
+            <View style={styles.header}>
+              <Text style={styles.brand}>GamotERP POS</Text>
+              {terminalLabel ? <Text style={styles.terminal}>{terminalLabel}</Text> : null}
+            </View>
+            {pinSetupRequired ? <PinSetup /> : <SignIn />}
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -40,6 +47,7 @@ export function CashierLoginScreen({ terminalLabel }: CashierLoginScreenProps) {
 // ---- Sign in / unlock --------------------------------------------------------------------------------------------
 
 function SignIn() {
+  const styles = useStyles();
   const online = useSyncStatus((s) => s.online);
   const locked = useCashier((s) => s.locked);
   const [pinUsers, setPinUsers] = useState<{ userId: number; name: string }[] | null>(null);
@@ -75,6 +83,7 @@ function SignIn() {
 }
 
 function Tab({ label, active, onPress, disabled }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
+  const styles = useStyles();
   return (
     <Pressable
       accessibilityRole="tab"
@@ -89,6 +98,7 @@ function Tab({ label, active, onPress, disabled }: { label: string; active: bool
 }
 
 function PasswordForm({ online, hasPinUsers }: { online: boolean; hasPinUsers: boolean }) {
+  const styles = useStyles();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
@@ -183,6 +193,7 @@ function PasswordForm({ online, hasPinUsers }: { online: boolean; hasPinUsers: b
 }
 
 function PinUnlock({ users, preselect }: { users: { userId: number; name: string }[]; preselect: number | null }) {
+  const styles = useStyles();
   const [userId, setUserId] = useState<number | null>(
     preselect !== null && users.some((u) => u.userId === preselect) ? preselect : users.length === 1 ? users[0].userId : null,
   );
@@ -271,6 +282,7 @@ function PinUnlock({ users, preselect }: { users: { userId: number; name: string
 // ---- Choose an offline PIN ---------------------------------------------------------------------------------------
 
 function PinSetup() {
+  const styles = useStyles();
   const cashier = useCashier((s) => s.cashier);
   const optional = useCashier((s) => s.pinChangeOptional);
   const [pin, setPin] = useState('');
@@ -295,7 +307,8 @@ function PinSetup() {
 
   const clean = (t: string) => t.replace(/\D/g, '').slice(0, PIN_MAX_LENGTH);
   return (
-    <Card title={optional ? 'Change your offline PIN' : 'Set your offline PIN'}>
+    <View>
+      <Text style={styles.sectionTitle}>{optional ? 'Change your offline PIN' : 'Set your offline PIN'}</Text>
       <Text style={styles.body}>
         {cashier ? `${cashier.name}, choose` : 'Choose'} a {PIN_MIN_LENGTH}–{PIN_MAX_LENGTH} digit PIN. It unlocks the till on this device
         when there is no connection. Keep it to yourself — sales are recorded under your name.
@@ -331,38 +344,67 @@ function PinSetup() {
         disabled={busy}
         style={styles.gapTop}
       />
-    </Card>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.background },
+const useStyles = makeStyles((c, t) => ({
+  root: { flex: 1, backgroundColor: c.background },
   center: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
-  panel: { width: '100%', maxWidth: 520 },
-  brand: { fontSize: font.huge, fontWeight: '700', color: colors.primary, textAlign: 'center' },
-  terminal: { fontSize: font.body, color: colors.muted, textAlign: 'center', marginBottom: spacing.lg },
-  tabs: { flexDirection: 'row', marginBottom: spacing.lg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary, overflow: 'hidden' },
-  tab: { flex: 1, paddingVertical: spacing.md, alignItems: 'center', backgroundColor: colors.surface },
-  tabActive: { backgroundColor: colors.primary },
-  tabDisabled: { opacity: 0.4 },
-  tabText: { color: colors.primary, fontWeight: '600', fontSize: font.body },
-  tabTextActive: { color: '#ffffff' },
+  // A centred card like the web app's sign-in page: white paper, a primary strip on top.
+  panel: {
+    width: '100%',
+    maxWidth: 480,
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.border,
+    overflow: 'hidden',
+    ...shadow.card,
+  },
+  strip: { height: 6, backgroundColor: c.primary },
+  panelBody: { padding: spacing.xxl },
+  header: { alignItems: 'center', marginBottom: spacing.xl },
+  brand: { ...t.display, color: c.primary, textAlign: 'center' },
+  terminal: { ...t.label, color: c.muted, textAlign: 'center', marginTop: spacing.xs },
+  sectionTitle: { ...t.heading, marginBottom: spacing.sm },
+  tabs: {
+    flexDirection: 'row',
+    marginBottom: spacing.xl,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.borderStrong,
+    overflow: 'hidden',
+  },
+  tab: {
+    flex: 1,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.surface,
+  },
+  tabActive: { backgroundColor: c.primarySoft },
+  tabDisabled: { opacity: 0.5 },
+  tabText: { ...t.button, color: c.muted, textAlign: 'center' },
+  tabTextActive: { color: c.primary },
   gap: { marginBottom: spacing.md },
   gapTop: { marginTop: spacing.sm },
-  label: { fontSize: font.small, color: colors.muted, marginBottom: spacing.xs, fontWeight: '600' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
+  label: { ...t.label, marginBottom: spacing.sm },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.lg },
   chip: {
+    minHeight: 48,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderRadius: radius.lg,
+    justifyContent: 'center',
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    borderColor: c.borderStrong,
+    backgroundColor: c.surface,
   },
-  chipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { color: colors.text, fontSize: font.body },
-  chipTextSelected: { color: '#ffffff', fontWeight: '600' },
-  pinInput: { fontSize: font.title, letterSpacing: 8, textAlign: 'center' },
-  hint: { color: colors.muted, fontSize: font.small, textAlign: 'center', marginTop: spacing.sm },
-  body: { color: colors.text, fontSize: font.body, marginBottom: spacing.md },
-});
+  chipSelected: { backgroundColor: c.primarySoft, borderColor: c.primary },
+  chipText: { ...t.body },
+  chipTextSelected: { ...t.bodyStrong, color: c.primary },
+  pinInput: { ...t.title, letterSpacing: 8, textAlign: 'center' },
+  hint: { ...t.caption, textAlign: 'center', marginTop: spacing.sm },
+  body: { ...t.body, color: c.muted, marginBottom: spacing.lg },
+}));

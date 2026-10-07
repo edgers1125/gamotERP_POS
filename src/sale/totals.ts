@@ -39,6 +39,9 @@ export interface TotalsLineInput {
   isVatable: boolean;
   /** Senior/PWD applies to this line (the sale has a statutory discount and the SKU is sc_pwd_eligible). */
   isStatutory: boolean;
+  /** A statutory line's rate (shared pricing; default 20 %). 0 = a Senior/PWD line of a promo item charged the PROMO
+   * price (VAT-exempt, no 20 % — src/sale/promos.ts `chargedLine`). */
+  statutoryDiscountRate?: number;
   itemDiscount: DiscountDraft;
 }
 
@@ -68,6 +71,7 @@ export function computeCartTotals(lines: TotalsLineInput[], transactionDiscount:
       itemDiscountAmount: itemDiscountAmounts[idx]!,
       isVatable: l.isVatable,
       isStatutory: l.isStatutory,
+      ...(l.statutoryDiscountRate !== undefined ? { statutoryDiscountRate: l.statutoryDiscountRate } : {}),
     })),
     transactionDiscountAmount,
   );
@@ -103,6 +107,8 @@ export function computePayloadTotals(
         unitPrice: Number(l.unit_price),
         isVatable: f.isVatable,
         isStatutory: statutoryOn && f.scPwdEligible,
+        // A Senior/PWD line of a promo item where the cashier chose the promo: VAT-exempt, no 20 % (as the server prices it).
+        ...(statutoryOn && f.scPwdEligible && l.promo_vs_scpwd === 'PROMO' ? { statutoryDiscountRate: 0 } : {}),
         itemDiscount: percent !== '' ? { value: percent, mode: 'percent' } : { value: l.item_discount_amount ?? '', mode: 'amount' },
       };
     }),

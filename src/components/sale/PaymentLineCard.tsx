@@ -1,12 +1,21 @@
 // One tender line: method, amount, reference number (where the method requires one), and for cash the cash received
-// with quick amounts and the change.
-import { StyleSheet, Text, View } from 'react-native';
+// with quick amounts, an optional count by denomination, and the change.
+import { useEffect, useState } from 'react';
+import { Text, View } from 'react-native';
 import type { PosPaymentMethod } from '@pos-api/contract';
 import { Button, TextField } from '../../ui/components';
-import { colors, font, radius, spacing } from '../../ui/theme';
+import { makeStyles } from '../../ui/brandTheme';
+import { radius, shadow, spacing } from '../../ui/theme';
 import { cleanDecimalInput, formatPeso, round2 } from '../../sale/money';
 import { quickTenders, type PaymentDraft } from '../../sale/payments';
 import { Chip } from './ui';
+import {
+  DenominationCounter,
+  denominationAmountText,
+  denominationTotalCents,
+  hasDenominationCounts,
+  type DenominationCounts,
+} from './DenominationCounter';
 
 export function PaymentLineCard({
   line,
@@ -26,11 +35,19 @@ export function PaymentLineCard({
   onRemove: () => void;
   disabled?: boolean;
 }) {
+  const styles = useStyles();
   const method = methods.find((m) => m.id === line.methodId);
   const isCash = method?.kind === 'CASH';
   const amount = Number(line.amount) || 0;
   const tendered = Number(line.tendered) || 0;
   const change = isCash && line.tendered.trim() !== '' && tendered >= amount ? round2(tendered - amount) : null;
+  // Cash received counted by denomination (optional). The counts only fill `tendered`; if it changes any other way
+  // (typed, a quick chip, another method), the counts no longer describe it and are dropped.
+  const [counting, setCounting] = useState(false);
+  const [counts, setCounts] = useState<DenominationCounts>({});
+  useEffect(() => {
+    if (hasDenominationCounts(counts) && denominationTotalCents(counts) !== Math.round(tendered * 100)) setCounts({});
+  }, [tendered, counts]);
 
   return (
     <View style={styles.card}>
@@ -97,6 +114,28 @@ export function PaymentLineCard({
           ))}
         </View>
       ) : null}
+      {isCash ? (
+        <View style={styles.countToggle}>
+          <Button
+            title={counting ? 'Hide bill count' : 'Count bills and coins'}
+            variant="ghost"
+            compact
+            onPress={() => setCounting((v) => !v)}
+            disabled={disabled}
+          />
+        </View>
+      ) : null}
+      {isCash && counting ? (
+        <DenominationCounter
+          counts={counts}
+          onChange={(next) => {
+            setCounts(next);
+            onChange({ tendered: denominationAmountText(next) });
+          }}
+          disabled={disabled}
+          title="Cash received by denomination"
+        />
+      ) : null}
       {change !== null ? (
         <View style={styles.change}>
           <Text style={styles.changeLabel}>Change</Text>
@@ -108,24 +147,33 @@ export function PaymentLineCard({
   );
 }
 
-const styles = StyleSheet.create({
-  card: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md, backgroundColor: colors.surface },
+const useStyles = makeStyles((c, t) => ({
+  card: {
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    backgroundColor: c.surface,
+    ...shadow.card,
+  },
   methods: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, alignItems: 'center', marginBottom: spacing.sm },
   row: { flexDirection: 'row', gap: spacing.sm },
   cell: { flex: 1, marginBottom: 0 },
-  big: { fontSize: font.title, minHeight: 56 },
+  big: { ...t.title, minHeight: 56 },
   quick: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
+  countToggle: { flexDirection: 'row', marginTop: spacing.xs, marginBottom: spacing.xs },
   change: {
     marginTop: spacing.sm,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: colors.success,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
+    backgroundColor: c.successSoft,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
-  changeLabel: { color: '#fff', fontSize: font.title, fontWeight: '700' },
-  changeValue: { color: '#fff', fontSize: font.huge, fontWeight: '800' },
-  error: { color: colors.danger, fontSize: font.small, marginTop: spacing.xs },
-});
+  changeLabel: { ...t.title, color: c.success },
+  changeValue: { ...t.display, color: c.success, fontVariant: ['tabular-nums'] },
+  error: { ...t.caption, color: c.danger, marginTop: spacing.xs },
+}));

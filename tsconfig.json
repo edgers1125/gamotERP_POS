@@ -6,11 +6,11 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "paths": {
-      "@shared/*": ["../GamotERP/backend/src/lib/*"],
-      "@pos-api/*": ["../GamotERP/backend/src/pos-api/*"],
+      "@shared/*": ["../GamotERP/apps/pharma/backend/src/lib/*"],
+      "@pos-api/*": ["../GamotERP/apps/pharma/backend/src/pos-api/*"],
       "@/*": ["./src/*"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", "../GamotERP/backend/src/pos-api/contract.ts", "../GamotERP/backend/src/lib/material-issuance-pricing.ts", "../GamotERP/backend/src/lib/discount.ts", "../GamotERP/backend/src/lib/business-day.ts", "../GamotERP/backend/src/lib/invoice-number.ts"],
+  "include": ["**/*.ts", "**/*.tsx", "../GamotERP/apps/pharma/backend/src/pos-api/contract.ts", "../GamotERP/apps/pharma/backend/src/lib/material-issuance-pricing.ts", "../GamotERP/apps/pharma/backend/src/lib/discount.ts", "../GamotERP/apps/pharma/backend/src/lib/business-day.ts", "../GamotERP/apps/pharma/backend/src/lib/invoice-number.ts", "../GamotERP/apps/pharma/backend/src/lib/receipt-layout.ts", "../GamotERP/apps/pharma/backend/src/lib/phone.ts", "../GamotERP/apps/pharma/backend/src/lib/promos/promo-math.ts"],
   "exclude": ["node_modules", "android", "ios"]
 }

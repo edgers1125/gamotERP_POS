@@ -1,12 +1,14 @@
 // Co-sign inputs shared by the void dialog and the refund screen: pick the approver (a user with the permission and
 // MFA on, from the server's eligible list — cached on the device for offline voids), their 6-digit authenticator code
 // (entered on this device by the approver), and the reason.
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import type { PosApprover } from '@pos-api/contract';
 
 import { TextField } from '../../ui/components';
-import { colors, font, radius, spacing } from '../../ui/theme';
+import { makeStyles } from '../../ui/brandTheme';
+import { spacing } from '../../ui/theme';
+import { Chip } from '../sale/ui';
 
 export interface ApprovalValue {
   approverId: number | null;
@@ -34,6 +36,7 @@ export interface ApprovalFieldsProps {
 }
 
 export function ApprovalFields({ approvers, value, onChange, approverLabel, emptyText, disabled }: ApprovalFieldsProps) {
+  const styles = useStyles();
   return (
     <View>
       <Text style={styles.label}>{approverLabel}</Text>
@@ -41,21 +44,15 @@ export function ApprovalFields({ approvers, value, onChange, approverLabel, empt
         <Text style={styles.empty}>{emptyText}</Text>
       ) : (
         <View style={styles.chips}>
-          {approvers.map((a) => {
-            const selected = a.id === value.approverId;
-            return (
-              <Pressable
-                key={a.id}
-                accessibilityRole="radio"
-                accessibilityState={{ selected, disabled }}
-                disabled={disabled}
-                onPress={() => onChange({ ...value, approverId: a.id })}
-                style={[styles.chip, selected && styles.chipSelected]}
-              >
-                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{a.name}</Text>
-              </Pressable>
-            );
-          })}
+          {approvers.map((a) => (
+            <Chip
+              key={a.id}
+              label={a.name}
+              selected={a.id === value.approverId}
+              disabled={disabled}
+              onPress={() => onChange({ ...value, approverId: a.id })}
+            />
+          ))}
         </View>
       )}
       <TextField
@@ -82,19 +79,8 @@ export function ApprovalFields({ approvers, value, onChange, approverLabel, empt
   );
 }
 
-const styles = StyleSheet.create({
-  label: { fontSize: font.small, color: colors.muted, marginBottom: spacing.xs, fontWeight: '600' },
-  empty: { color: colors.warning, fontSize: font.small, marginBottom: spacing.md },
+const useStyles = makeStyles((c, t) => ({
+  label: { ...t.label, marginBottom: spacing.xs },
+  empty: { ...t.caption, color: c.warning, marginBottom: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
-  chip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  chipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { color: colors.text, fontSize: font.body },
-  chipTextSelected: { color: '#ffffff', fontWeight: '600' },
-});
+}));

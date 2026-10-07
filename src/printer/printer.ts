@@ -22,7 +22,13 @@ const GS = 0x1d;
 
 /** Plain-text receipt → ESC/POS bytes: init, text (non-ASCII replaced — most receipt printers lack ₱), feed, cut. */
 export function escPosFromLines(lines: string[]): Uint8Array {
-  const text = lines.join('\n').replace(/₱/g, 'P').replace(/[^\x0a\x20-\x7e]/g, '?') + '\n\n\n';
+  // ₱ → P, dashes / middle dots → "-" (the receipt's "—" blanks and "·" separators); anything else non-ASCII → "?".
+  const text =
+    lines
+      .join('\n')
+      .replace(/₱/g, 'P')
+      .replace(/[—–·]/g, '-')
+      .replace(/[^\x0a\x20-\x7e]/g, '?') + '\n\n\n';
   const bytes: number[] = [ESC, 0x40]; // initialize
   for (let i = 0; i < text.length; i++) bytes.push(text.charCodeAt(i));
   bytes.push(GS, 0x56, 0x42, 0x00); // feed and partial cut

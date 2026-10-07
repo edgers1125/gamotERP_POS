@@ -1,20 +1,37 @@
 // Online search of the company's clients (GET /pos/clients?search=, ≥ 2 characters — needs a connection and an
 // online cashier session). Offline, the cashier records a new named client instead (merged on sync).
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import type { PosClient } from '@pos-api/contract';
 import { api } from '../../api/client';
 import { cashierSession } from '../../auth/cashierSession';
 import { TextField } from '../../ui/components';
-import { colors, font, radius, spacing } from '../../ui/theme';
+import { makeStyles, useThemeColors } from '../../ui/brandTheme';
+import { radius, spacing } from '../../ui/theme';
 import { clientName, statutoryTypeLabel } from '../../sale/statutory';
 import { HintText } from './ui';
 
+/**
+ * Client lookups (GET /pos/clients) need the network AND a live online cashier token. A PIN unlock gives no token
+ * (unless it resumed the same cashier's still-valid online session), and an online token lapses after
+ * CASHIER_TOKEN_TTL_SECONDS while the session still says ONLINE — so the token itself is checked, not just the mode
+ * (checking only the mode let every lookup fail silently with CASHIER_SIGN_IN_REQUIRED once the token expired).
+ */
 export function canSearchClients(online: boolean): boolean {
-  return online && cashierSession.current()?.mode === 'ONLINE';
+  return online && cashierSession.isOnlineSession();
+}
+
+/** Why returning clients can't be looked up right now (null = they can). Never weakens auth — it only explains. */
+export function clientLookupUnavailableReason(online: boolean): string | null {
+  if (canSearchClients(online)) return null;
+  if (!online) return 'Offline — returning clients can’t be looked up now.';
+  if (cashierSession.current()?.mode === 'ONLINE') return 'Your online sign-in has expired — sign in with your password again to look up returning clients.';
+  return 'Sign in with your password to look up returning clients — a PIN unlock works offline only.';
 }
 
 export function ClientSearch({ online, selectedId, onPick }: { online: boolean; selectedId: number | null; onPick: (c: PosClient) => void }) {
+  const styles = useStyles();
+  const theme = useThemeColors();
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<PosClient[]>([]);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -48,8 +65,7 @@ export function ClientSearch({ online, selectedId, onPick }: { online: boolean; 
   if (!enabled) {
     return (
       <HintText>
-        {online ? 'Finding an existing client needs an online sign-in (you unlocked with your PIN).' : 'Finding an existing client needs a connection.'} Record a new
-        client instead — it’s matched to an existing record when the sale syncs.
+        {clientLookupUnavailableReason(online)} Record a new client instead — it’s matched to an existing record when the device checks in.
       </HintText>
     );
   }
@@ -73,10 +89,10 @@ export function ClientSearch({ online, selectedId, onPick }: { online: boolean; 
             key={c.id}
             accessibilityRole="button"
             onPress={() => onPick(c)}
-            style={({ pressed }) => [styles.row, on && styles.rowOn, pressed && { opacity: 0.8 }]}
+            style={({ pressed }) => [styles.row, on && styles.rowOn, pressed && !on && { backgroundColor: theme.primarySoft }]}
           >
-            <Text style={[styles.name, on && { color: '#fff' }]}>{clientName(c)}</Text>
-            <Text style={[styles.meta, on && { color: '#fff' }]}>
+            <Text style={[styles.name, on && { color: theme.primary }]}>{clientName(c)}</Text>
+            <Text style={styles.meta}>
               {[c.phone_number, c.statutory_type ? `${statutoryTypeLabel(c.statutory_type)} ${c.statutory_id_number ?? ''}` : null]
                 .filter(Boolean)
                 .join('  ·  ') || 'No contact details'}
@@ -88,20 +104,20 @@ export function ClientSearch({ online, selectedId, onPick }: { online: boolean; 
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((c, t) => ({
   row: {
     minHeight: 56,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
+    borderColor: c.border,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     marginBottom: spacing.xs,
-    backgroundColor: colors.surface,
+    backgroundColor: c.surface,
     justifyContent: 'center',
   },
-  rowOn: { backgroundColor: colors.primary, borderColor: colors.primary },
-  name: { fontSize: font.body, fontWeight: '600', color: colors.text },
-  meta: { fontSize: font.small, color: colors.muted },
-  error: { color: colors.danger, fontSize: font.small },
-});
+  rowOn: { backgroundColor: c.primarySoft, borderColor: c.primary },
+  name: { ...t.bodyStrong },
+  meta: { ...t.caption },
+  error: { ...t.caption, color: c.danger },
+}));

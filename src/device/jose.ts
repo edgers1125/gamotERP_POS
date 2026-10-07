@@ -3,10 +3,11 @@
 import * as Crypto from 'expo-crypto';
 
 import { canonicalJson } from '@pos-api/contract';
-import type { SalePayload, VoidPayload } from '@pos-api/contract';
+import type { PosAttendancePunchPayload, SyncOp } from '@pos-api/contract';
 import type { Jose } from '../contracts';
 import { base64ToBase64Url, base64UrlFromString } from './base64url';
 import { deviceKey } from './deviceKey';
+import { serverClock } from './serverClock';
 
 async function compactJws(header: Record<string, unknown>, payloadText: string): Promise<string> {
   const signingInput = `${base64UrlFromString(JSON.stringify(header))}.${base64UrlFromString(payloadText)}`;
@@ -34,7 +35,9 @@ export const jose: Jose = {
     const claims: Record<string, unknown> = {
       htm: method.toUpperCase(),
       htu: htuOf(url),
-      iat: Math.floor(Date.now() / 1000),
+      // The SERVER's time (device clock + the learned offset, src/device/serverClock.ts): the server accepts iat only
+      // within ±60 s of its own clock, so a tablet whose clock is off would otherwise be refused every token / sync.
+      iat: Math.floor((await serverClock.nowMs()) / 1000),
       jti: Crypto.randomUUID(),
     };
     if (accessToken) claims.ath = await accessTokenHash(accessToken);
@@ -42,7 +45,12 @@ export const jose: Jose = {
     return compactJws(header, JSON.stringify(claims));
   },
 
-  async signOpPayload(payload: SalePayload | VoidPayload) {
+  async signOpPayload(payload: SyncOp['payload']) {
+    const kid = await deviceKey.thumbprint();
+    return compactJws({ alg: 'ES256', typ: 'pos-op+jws', kid }, canonicalJson(payload));
+  },
+
+  async signPunchPayload(payload: PosAttendancePunchPayload) {
     const kid = await deviceKey.thumbprint();
     return compactJws({ alg: 'ES256', typ: 'pos-op+jws', kid }, canonicalJson(payload));
   },

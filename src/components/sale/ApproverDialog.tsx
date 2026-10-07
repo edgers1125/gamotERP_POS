@@ -2,12 +2,13 @@
 // 6-digit code from their authenticator app ON THIS DEVICE. The code isn't checked here: the server verifies it at
 // sync against the sale's own time (sold_at), replay-guarded, and flags INVALID_APPROVAL_CODE if it's wrong.
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { PosApprovalKind, PosApprover } from '@pos-api/contract';
 import { Button, TextField } from '../../ui/components';
-import { colors, font, radius, spacing } from '../../ui/theme';
+import { makeStyles } from '../../ui/brandTheme';
+import { spacing } from '../../ui/theme';
 import { loadApprovers, type Approval } from '../../sale/checkout';
-import { HintText, Sheet } from './ui';
+import { HintText, OptionTile, Sheet } from './ui';
 
 export function ApproverDialog({
   visible,
@@ -28,6 +29,7 @@ export function ApproverDialog({
   onApprove: (approval: Approval) => void;
   onClose: () => void;
 }) {
+  const styles = useStyles();
   const [approvers, setApprovers] = useState<PosApprover[] | null>(null);
   const [picked, setPicked] = useState<number | null>(null);
   const [code, setCode] = useState('');
@@ -77,22 +79,9 @@ export function ApproverDialog({
         </Text>
       ) : (
         <View style={styles.grid}>
-          {approvers.map((item) => {
-            const on = item.id === picked;
-            return (
-              <Pressable
-                key={item.id}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: on }}
-                onPress={() => setPicked(item.id)}
-                style={[styles.approver, on && styles.approverOn]}
-              >
-                <Text style={[styles.approverText, on && { color: '#fff' }]} numberOfLines={1}>
-                  {item.name}
-                </Text>
-              </Pressable>
-            );
-          })}
+          {approvers.map((item) => (
+            <OptionTile key={item.id} label={item.name} selected={item.id === picked} onPress={() => setPicked(item.id)} />
+          ))}
         </View>
       )}
       <View style={{ height: spacing.md }} />
@@ -105,28 +94,16 @@ export function ApproverDialog({
         secureTextEntry
         placeholder="••••••"
         style={styles.code}
-        hint="The approver types the code from their authenticator app. It’s checked by the server when the sale syncs."
+        hint="The approver types the code from their authenticator app. It’s checked by the server when the device checks in."
       />
     </Sheet>
   );
 }
 
-const styles = StyleSheet.create({
-  explain: { fontSize: font.body, color: colors.text, marginBottom: spacing.md },
-  label: { fontSize: font.small, color: colors.muted, fontWeight: '600', marginBottom: spacing.xs },
-  warn: { color: colors.warning, fontSize: font.body },
+const useStyles = makeStyles((c, t) => ({
+  explain: { ...t.body, marginBottom: spacing.md },
+  label: { ...t.label, marginBottom: spacing.xs },
+  warn: { ...t.body, color: c.warning },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  approver: {
-    width: '48%',
-    minHeight: 52,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
-    borderRadius: radius.md,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.surface,
-  },
-  approverOn: { backgroundColor: colors.primary },
-  approverText: { fontSize: font.body, fontWeight: '600', color: colors.primary },
-  code: { fontSize: font.huge, letterSpacing: 8, textAlign: 'center', minHeight: 60 },
-});
+  code: { fontFamily: t.bodyStrong.fontFamily, fontSize: 28, letterSpacing: 8, textAlign: 'center', minHeight: 60 },
+}));

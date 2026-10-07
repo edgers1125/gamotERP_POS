@@ -7,6 +7,12 @@
 //     module imports this one).
 // Every failure is an ApiError: status 0 = network/timeout (offline), code DEVICE_REVOKED / APP_UPDATE_REQUIRED from
 // the server, fieldErrors from a Zod 400 (message = the first field error, as the web app shows).
+// Every response (any status) also feeds the server-clock offset (src/device/serverClock.ts: body `server_time`, else
+// the `Date` header) that DPoP proofs take their `iat` from; a 401 that moved the offset (the server refused the
+// proof's iat — a tablet with a wrong clock) is retried once with a fresh proof.
+// License lease (contract "License lease", src/license/): every check-in response (device token, heartbeat, bootstrap)
+// is handed to src/license/licenseEvents.ts — `license` absent included (= the server issues no leases); a 403
+// SUBSCRIPTION_LOCKED signals the lock, and a success of a call a locked company is refused signals "not locked".
 import * as Crypto from 'expo-crypto';
 
 import type {
@@ -24,10 +30,19 @@ import type {
   PosBootstrap,
   PosCatalog,
   PosClient,
+  PosDisplayConfig,
+  PosDisplayImage,
+  PosBrand,
+  PosLicense,
+  PosLicensePublicKey,
   PosRefundRequest,
   PosRefundResponse,
   PosSaleRow,
   PosStockRow,
+  PosAttendanceEmployees,
+  PosAttendanceKiosk,
+  PosAttendancePunchResult,
+  PosAttendanceTicket,
   SyncOp,
   SyncRequest,
   SyncResponse,
@@ -35,10 +50,12 @@ import type {
 import { appVersionName } from '../config/runtime';
 import { serverConfig } from '../config/serverConfig';
 import { ApiError } from '../contracts';
-import type { PosApi } from '../contracts';
+import type { AttendanceApi, PosApi } from '../contracts';
 import { base64ToBase64Url } from '../device/base64url';
 import { deviceKey } from '../device/deviceKey';
 import { jose } from '../device/jose';
+import { serverClock } from '../device/serverClock';
+import { emitLicenseSignal } from '../license/licenseEvents';
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const LONG_TIMEOUT_MS = 60_000; // catalog download, sync batches, enrollment (key generation + Play Integrity)
@@ -62,11 +79,36 @@ export function appVersion(): string {
 
 type AuthKind = 'none' | 'proof' | 'device' | 'cashier';
 
+// Check-ins: they carry `license` and keep working while the subscription is locked (contract ERRORS).
+const CHECK_IN_SOURCES: Record<string, 'token' | 'heartbeat' | 'bootstrap'> = {
+  '/pos/device/token': 'token',
+  '/pos/heartbeat': 'heartbeat',
+  '/pos/bootstrap': 'bootstrap',
+};
+// Also answered while locked, so their success says nothing about the lock.
+const ALLOWED_WHILE_LOCKED = new Set(['/pos/sync', '/pos/receipt/logo', '/pos/attendance/punches']);
+
+function emitLicenseFromResponse(spec: RequestSpec, body: unknown): void {
+  const source = CHECK_IN_SOURCES[spec.path];
+  if (source) {
+    const b = isRecord(body) ? body : {};
+    const license = isRecord(b.license) ? (b.license as unknown as PosLicense) : undefined;
+    const publicKeys = Array.isArray(b.license_public_keys) ? (b.license_public_keys as PosLicensePublicKey[]) : undefined;
+    emitLicenseSignal({ kind: 'check-in', source, license, publicKeys });
+  } else if ((spec.auth === 'device' || spec.auth === 'cashier') && !ALLOWED_WHILE_LOCKED.has(spec.path)) {
+    emitLicenseSignal({ kind: 'not-locked' });
+  }
+}
+
 interface RequestSpec {
   method: 'GET' | 'POST';
   path: string; // e.g. "/pos/bootstrap"
   query?: Record<string, string | undefined>;
   body?: unknown;
+  /** multipart/form-data instead of a JSON body — a factory, so a retry (401) sends a fresh FormData. */
+  form?: () => FormData;
+  /** Non-2xx statuses whose JSON body is the answer (returned, not thrown) — e.g. 422 REJECTED of a punch upload. */
+  acceptStatuses?: number[];
   auth: AuthKind;
   timeoutMs?: number;
 }
@@ -99,6 +141,14 @@ async function getDeviceToken(): Promise<string> {
   return tokenInFlight;
 }
 
+/** Device-auth headers for a request made outside `send` (the real-time WebSocket handshake, src/sync/realtime.ts):
+ * `Authorization: DPoP <device token>` + a DPoP proof (with `ath`) for `method` and `httpUrl` — the HTTP(S) form of
+ * the URL, which is what the server checks `htu` against. Same token cache and proof as every REST device call. */
+export async function deviceAuthHeaders(method: 'GET' | 'POST', httpUrl: string): Promise<Record<string, string>> {
+  const token = await getDeviceToken();
+  return { Authorization: `DPoP ${token}`, DPoP: await jose.dpopProof(method, httpUrl, token) };
+}
+
 async function cashierToken(): Promise<string | null> {
   const { cashierSession } = await import('../auth/cashierSession');
   return cashierSession.tokenForApi();
@@ -128,6 +178,7 @@ function defaultMessage(status: number): string {
   if (status === 401) return 'This device is not authorized — try again, or re-enroll it';
   if (status === 403) return 'You are not allowed to do this';
   if (status === 404) return 'Not found on the server';
+  if (status === 413) return 'Too much data for the server in one request';
   if (status === 426) return 'This app is too old for the terminal — install the update';
   if (status === 429) return 'Too many attempts — wait a few minutes and try again';
   if (status >= 500) return 'The server had a problem — try again';
@@ -165,7 +216,8 @@ function toApiError(status: number, body: unknown): ApiError {
 async function send<T>(spec: RequestSpec, retried = false): Promise<T> {
   const url = buildUrl(await baseUrl(), spec.path, spec.query);
   const headers: Record<string, string> = { Accept: 'application/json' };
-  if (spec.body !== undefined) headers['Content-Type'] = 'application/json';
+  // A FormData body sets its own multipart Content-Type (with the boundary).
+  if (spec.body !== undefined && !spec.form) headers['Content-Type'] = 'application/json';
 
   if (spec.auth === 'proof') {
     headers.DPoP = await jose.dpopProof(spec.method, url);
@@ -192,14 +244,18 @@ async function send<T>(spec: RequestSpec, retried = false): Promise<T> {
 
   let status: number;
   let text: string;
+  let dateHeader: string | null = null;
+  let headersAt = 0;
   try {
     const res = await fetch(url, {
       method: spec.method,
       headers,
-      body: spec.body !== undefined ? JSON.stringify(spec.body) : undefined,
+      body: spec.form ? spec.form() : spec.body !== undefined ? JSON.stringify(spec.body) : undefined,
       signal: controller.signal,
     });
+    headersAt = Date.now();
     status = res.status;
+    dateHeader = res.headers.get('date');
     text = await res.text();
   } catch {
     throw new ApiError(
@@ -220,16 +276,31 @@ async function send<T>(spec: RequestSpec, retried = false): Promise<T> {
     }
   }
 
+  // Server clock (DPoP iat): body `server_time` when present (success bodies; a 401 for a bad/stale proof), else `Date`.
+  const clockMoved = await serverClock
+    .observe(isRecord(body) ? body.server_time : undefined, dateHeader, headersAt)
+    .catch(() => false);
+
   if (status >= 200 && status < 300) {
     if (body === null && text) throw new ApiError(502, 'The server sent an unreadable response');
+    emitLicenseFromResponse(spec, body);
     return body as T;
   }
 
+  if (spec.acceptStatuses?.includes(status) && isRecord(body)) return body as T;
+
   const error = toApiError(status, body);
+  if (status === 403 && error.code === 'SUBSCRIPTION_LOCKED') emitLicenseSignal({ kind: 'locked', source: 'rest' });
   if (status === 401 && (spec.auth === 'device' || spec.auth === 'cashier') && error.code !== 'DEVICE_REVOKED') {
-    // Token expired/rejected (server restart, clock skew…): get a fresh device token and try once more.
+    // Token expired/rejected (server restart, clock skew…): get a fresh device token and try once more (its proof and
+    // the retry's proof use the just-corrected server clock when this 401 was the proof's iat).
     resetDeviceToken();
     if (!retried) return send<T>(spec, true);
+  }
+  if (status === 401 && spec.auth === 'proof' && clockMoved && !retried) {
+    // POST /pos/device/token or enroll refused the proof and the response showed our clock estimate was off: the
+    // offset is corrected now — one more try with a fresh proof (same body; nothing was consumed by a refused proof).
+    return send<T>(spec, true);
   }
   throw error;
 }
@@ -327,5 +398,64 @@ export const api: PosApi = {
 
   async heartbeat(input: HeartbeatRequest) {
     return send<HeartbeatResponse>({ method: 'POST', path: '/pos/heartbeat', body: input, auth: 'device' });
+  },
+
+  async display() {
+    return send<PosDisplayConfig>({ method: 'GET', path: '/pos/display', auth: 'device' });
+  },
+
+  async displayLogo() {
+    return send<PosDisplayImage>({ method: 'GET', path: '/pos/display/logo', auth: 'device', timeoutMs: LONG_TIMEOUT_MS });
+  },
+
+  async displayAd(id: number) {
+    return send<PosDisplayImage>({ method: 'GET', path: `/pos/display/ads/${encodeURIComponent(String(id))}`, auth: 'device', timeoutMs: LONG_TIMEOUT_MS });
+  },
+
+  async cashierBrand() {
+    return send<PosBrand>({ method: 'GET', path: '/pos/cashier/brand', auth: 'cashier' });
+  },
+
+  async cashierBrandLogo() {
+    return send<PosDisplayImage>({ method: 'GET', path: '/pos/cashier/brand/logo', auth: 'cashier', timeoutMs: LONG_TIMEOUT_MS });
+  },
+
+  async receiptLogo() {
+    return send<PosDisplayImage>({ method: 'GET', path: '/pos/receipt/logo', auth: 'device', timeoutMs: LONG_TIMEOUT_MS });
+  },
+};
+
+// ---- attendance kiosk mode (contract "Attendance kiosk mode"; device auth only, no cashier) ----
+
+export const attendanceApi: AttendanceApi = {
+  async kiosk() {
+    return send<PosAttendanceKiosk>({ method: 'GET', path: '/pos/attendance/kiosk', auth: 'device' });
+  },
+
+  async employees() {
+    return send<PosAttendanceEmployees>({ method: 'GET', path: '/pos/attendance/employees', auth: 'device' });
+  },
+
+  async pin(input) {
+    return send<PosAttendanceTicket>({ method: 'POST', path: '/pos/attendance/pin', body: input, auth: 'device' });
+  },
+
+  async punch({ punchText, signature, files }) {
+    const form = () => {
+      const fd = new FormData();
+      fd.append('punch', punchText);
+      fd.append('signature', signature);
+      // React Native's FormData reads a { uri, name, type } part from the file — the exact bytes whose sha256 was signed.
+      for (const f of files) fd.append(f.name, { uri: f.uri, name: f.filename, type: 'image/jpeg' } as unknown as Blob);
+      return fd;
+    };
+    return send<PosAttendancePunchResult>({
+      method: 'POST',
+      path: '/pos/attendance/punches',
+      form,
+      acceptStatuses: [422],
+      auth: 'device',
+      timeoutMs: LONG_TIMEOUT_MS,
+    });
   },
 };

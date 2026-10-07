@@ -2,6 +2,7 @@
 // (REVISION 2: the card lives on the client). The 20% / VAT-exempt arithmetic is the shared pricing code's; this file
 // only holds the draft the cashier fills in and the checks the server would otherwise refuse (or flag) at sync.
 import { businessToday } from '@shared/business-day';
+import { normalizePhone } from '@shared/phone';
 import type { PosClient, SaleStatutoryPayload } from '@pos-api/contract';
 
 export type StatutoryType = 'SENIOR' | 'PWD';
@@ -130,7 +131,7 @@ export function statutoryProblem(d: StatutoryDraft): string | null {
     if (!isValidDate(d.expiryDate)) return 'Use the date format YYYY-MM-DD for the expiry date.';
     if (isIdExpired(d.expiryDate)) return `This PWD ID expired on ${formatDateOnly(d.expiryDate)} — update the card details.`;
   }
-  if (d.phone.trim().length > 30) return 'The phone number must be 30 characters or fewer.';
+  if (normalizePhone(d.phone).length > 30) return 'The phone number must be 30 characters or fewer.';
   const missing = missingAddressFields(d.address);
   if (missing.length > 0) return `Finish the client’s address (${missing.join(', ')}) or clear it.`;
   return null;
@@ -138,6 +139,18 @@ export function statutoryProblem(d: StatutoryDraft): string | null {
 
 export function clientHasStatutory(c: PosClient | null | undefined): c is PosClient & { statutory_type: StatutoryType; statutory_id_number: string } {
   return !!c && !!c.statutory_type && !!c.statutory_id_number;
+}
+
+/**
+ * Whether a client's card on record can be applied as-is when they're picked: a Senior Citizen ID never expires; a PWD
+ * ID needs an expiry date that hasn't passed (Manila today counts as valid). Returns why not, or null when usable.
+ */
+export function clientStatutoryBlock(c: PosClient): string | null {
+  if (!clientHasStatutory(c) || c.statutory_type !== 'PWD') return null;
+  const expiry = (c.id_expiry_date ?? '').slice(0, 10);
+  if (expiry === '') return 'Their PWD ID has no expiry date on record — open Senior / PWD to enter it.';
+  if (isIdExpired(expiry)) return `Their PWD ID expired on ${formatDateOnly(expiry)} — the discount wasn’t applied. Open Senior / PWD if they have a renewed card.`;
+  return null;
 }
 
 /** The server refuses a sale whose existing client is on record with a DIFFERENT card (mirrors lib/statutory-client.ts). */
@@ -165,7 +178,7 @@ export function draftFromClient(c: PosClient, base: StatutoryDraft = EMPTY_STATU
 }
 
 export function statutoryPayload(d: StatutoryDraft): SaleStatutoryPayload {
-  const phone = d.phone.trim();
+  const phone = normalizePhone(d.phone); // canonical (`@shared/phone`)
   const a = d.address;
   const address = addressStarted(a) && missingAddressFields(a).length === 0 ? a : null;
   return {

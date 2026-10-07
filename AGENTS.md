@@ -43,8 +43,8 @@ Docs: https://docs.expo.dev/eas/index.md
 ## GamotERP POS — project rules (override the generic guidance above where they differ)
 
 - **Navigation is React Navigation (`@react-navigation/native-stack`), NOT Expo Router.** Screens live in `src/screens/`.
-- The plan and full contract: `../GamotERP/docs/plans/pos-android-app.md`; the backend API types: `@pos-api/contract`
-  (`../GamotERP/backend/src/pos-api/contract.ts`). Shared business logic comes from the backend, never re-implemented:
+- The plan and full contract: `../GamotERP/apps/pharma/docs/plans/pos-android-app.md`; the backend API types: `@pos-api/contract`
+  (`../GamotERP/apps/pharma/backend/src/pos-api/contract.ts`). Shared business logic comes from the backend, never re-implemented:
   `@shared/material-issuance-pricing`, `@shared/discount`, `@shared/business-day`, `@shared/invoice-number`.
 - The app's internal module boundaries are in `src/contracts.ts` — implement the module you own to that interface.
 - Do NOT run `npm install` / `npx expo install` (several agents share this folder). If you need a package, say so in

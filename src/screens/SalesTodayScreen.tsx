@@ -5,7 +5,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import type { PosSaleRow } from '@pos-api/contract';
 import { businessDate } from '@shared/business-day';
@@ -19,8 +19,9 @@ import { api } from '../api/client';
 import { localStore } from '../db/localStore';
 import { formatPeso } from '../sale/money';
 import { useSyncStatus } from '../sync/syncEngine';
-import { Banner, Button, Card, Screen } from '../ui/components';
-import { colors, font, spacing } from '../ui/theme';
+import { Banner, Button, Screen } from '../ui/components';
+import { makeStyles, useThemeColors, type ThemeColors } from '../ui/brandTheme';
+import { fontFamily, radius, shadow, spacing } from '../ui/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SalesToday'>;
 
@@ -69,23 +70,48 @@ function mergeRows(local: LocalSale[], server: PosSaleRow[]): Row[] {
   return rows.sort((a, b) => (a.soldAt < b.soldAt ? 1 : a.soldAt > b.soldAt ? -1 : 0));
 }
 
-function syncLabel(row: Row): { text: string; color: string } {
+type Tone = 'success' | 'warning' | 'danger' | 'info';
+
+// Token names, resolved against the live brand colours in Pill.
+const TONES: Record<Tone, { bg: keyof ThemeColors; fg: keyof ThemeColors }> = {
+  success: { bg: 'successSoft', fg: 'success' },
+  warning: { bg: 'warningSoft', fg: 'warning' },
+  danger: { bg: 'dangerSoft', fg: 'danger' },
+  info: { bg: 'infoSoft', fg: 'info' },
+};
+
+/** A small status badge (like MUI's small soft Chip). */
+function Pill({ tone, text }: { tone: Tone; text: string }) {
+  const styles = useStyles();
+  const c = useThemeColors();
+  const t = TONES[tone];
+  return (
+    <View style={[styles.pill, { backgroundColor: c[t.bg] }]}>
+      <Text style={[styles.pillText, { color: c[t.fg] }]} numberOfLines={2}>
+        {text}
+      </Text>
+    </View>
+  );
+}
+
+function syncLabel(row: Row): { text: string; tone: Tone } {
   if (row.local) {
     switch (row.local.sync_status) {
       case 'PENDING':
-        return { text: 'Not synced yet', color: colors.warning };
+        return { text: 'Unsent', tone: 'warning' };
       case 'REJECTED':
-        return { text: 'Rejected by server', color: colors.danger };
+        return { text: 'Rejected by server', tone: 'danger' };
       default: {
         const n = row.local.sync_result?.exceptions.length ?? 0;
-        return n > 0 ? { text: `Synced · ${n} for review`, color: colors.warning } : { text: 'Synced', color: colors.success };
+        return n > 0 ? { text: `Checked in · ${n} for review`, tone: 'warning' } : { text: 'Checked in', tone: 'success' };
       }
     }
   }
-  return { text: 'Recorded', color: colors.success };
+  return { text: 'Recorded', tone: 'success' };
 }
 
 export function SalesTodayScreen({ navigation }: Props) {
+  const styles = useStyles();
   const online = useSyncStatus((s) => s.online);
   const lastSyncAt = useSyncStatus((s) => s.lastSyncAt);
   const cashier = useCashier((s) => s.cashier);
@@ -177,15 +203,16 @@ export function SalesTodayScreen({ navigation }: Props) {
             <Text style={styles.errorText}>{row.local.sync_result.error}</Text>
           ) : null}
         </View>
-        <Text style={[styles.total, voided && styles.struck]}>{formatPeso(row.total)}</Text>
+        <Text style={[styles.total, styles.totalCol, voided && styles.struck]}>{formatPeso(row.total)}</Text>
         <View style={styles.statusCol}>
-          <Text style={[styles.status, { color: sync.color }]}>{sync.text}</Text>
+          <Pill tone={sync.tone} text={sync.text} />
           {voided ? (
-            <Text style={[styles.status, { color: colors.danger }]}>
-              Voided{voidStatus === 'PENDING' ? ' (not synced yet)' : voidStatus === 'REJECTED' ? ' (void rejected)' : ''}
-            </Text>
+            <Pill
+              tone="danger"
+              text={`Voided${voidStatus === 'PENDING' ? ' (unsent)' : voidStatus === 'REJECTED' ? ' (void rejected)' : ''}`}
+            />
           ) : null}
-          {refunded ? <Text style={[styles.status, { color: colors.warning }]}>Refunded</Text> : null}
+          {refunded ? <Pill tone="warning" text="Refunded" /> : null}
         </View>
         <View style={styles.actionCol}>
           {row.local ? (
@@ -247,9 +274,18 @@ export function SalesTodayScreen({ navigation }: Props) {
           style={styles.gap}
         />
       ) : null}
-      <Card title={`${totals.count} sale(s) · net ${formatPeso(totals.sales)}`}>
+      <View style={styles.table}>
+        <View style={styles.tableTitleRow}>
+          <Text style={styles.tableTitle}>{`${totals.count} sale(s) · net ${formatPeso(totals.sales)}`}</Text>
+        </View>
+        <View style={styles.headRow}>
+          <Text style={[styles.headCell, styles.rowMain]}>Invoice</Text>
+          <Text style={[styles.headCell, styles.totalCol]}>Total</Text>
+          <Text style={[styles.headCell, styles.statusCol]}>Status</Text>
+          <View style={styles.actionCol} />
+        </View>
         {rows.length === 0 ? <Text style={styles.empty}>{loading ? 'Loading…' : 'No sales on this day.'}</Text> : rows.map(renderRow)}
-      </Card>
+      </View>
       <VoidDialog
         sale={voidTarget}
         onClose={() => setVoidTarget(null)}
@@ -262,24 +298,57 @@ export function SalesTodayScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((c, t) => ({
   gap: { marginBottom: spacing.md },
-  empty: { color: colors.muted, fontSize: font.body, paddingVertical: spacing.lg, textAlign: 'center' },
+  // Table (like MUI Paper + Table): white surface, 1px border, muted header row, 1px row dividers.
+  table: {
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.border,
+    overflow: 'hidden',
+    marginBottom: spacing.md,
+    ...shadow.card,
+  },
+  tableTitleRow: { paddingVertical: spacing.md, paddingHorizontal: spacing.lg },
+  tableTitle: { ...t.heading },
+  headRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: c.surfaceMuted,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
+  headCell: { ...t.overline },
+  empty: {
+    ...t.body,
+    color: c.muted,
+    paddingVertical: spacing.xl,
+    textAlign: 'center',
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
     gap: spacing.md,
   },
   rowMain: { flex: 3 },
-  invoice: { fontSize: font.body, fontWeight: '700', color: colors.text },
-  meta: { fontSize: font.small, color: colors.muted },
-  errorText: { fontSize: font.small, color: colors.danger },
-  total: { flex: 1.3, fontSize: font.body, fontWeight: '700', color: colors.text, textAlign: 'right' },
-  struck: { textDecorationLine: 'line-through', color: colors.muted },
-  statusCol: { flex: 2 },
-  status: { fontSize: font.small, fontWeight: '600' },
+  invoice: { ...t.bodyStrong },
+  meta: { ...t.caption, marginTop: 2 },
+  errorText: { ...t.caption, color: c.danger, marginTop: 2 },
+  totalCol: { flex: 1.3, textAlign: 'right' },
+  total: { ...t.money },
+  struck: { textDecorationLine: 'line-through', color: c.muted },
+  statusCol: { flex: 2, alignItems: 'flex-start', gap: spacing.xs },
+  pill: { alignSelf: 'flex-start', borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm + 2 },
+  pillText: { ...t.caption, fontFamily: fontFamily.medium },
   actionCol: { flex: 2.2, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: spacing.sm },
-});
+}));

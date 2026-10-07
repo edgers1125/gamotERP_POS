@@ -8,7 +8,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 
 import type { PosApprover, PosRefundRequest, PosRefundResponse } from '@pos-api/contract';
 import { formatInvoiceNumber } from '@shared/invoice-number';
@@ -23,7 +23,8 @@ import { ApiError } from '../contracts';
 import { localStore } from '../db/localStore';
 import { useSyncStatus } from '../sync/syncEngine';
 import { Banner, Button, Card, Screen, TextField } from '../ui/components';
-import { colors, font, spacing } from '../ui/theme';
+import { makeStyles } from '../ui/brandTheme';
+import { spacing } from '../ui/theme';
 
 export type RefundParams = { batchId?: number; invoiceNumber?: string; saleClientUuid?: string } | undefined;
 
@@ -51,6 +52,7 @@ const writePending = (a: Attempt) => SecureStore.setItemAsync(PENDING_KEY, JSON.
 const clearPending = () => SecureStore.deleteItemAsync(PENDING_KEY).catch(() => undefined);
 
 export function RefundScreen({ route, navigation }: Props) {
+  const styles = useStyles();
   const fromRow = route.params ?? {};
   const online = useSyncStatus((s) => s.online);
   const cashier = useCashier((s) => s.cashier);
@@ -138,6 +140,15 @@ export function RefundScreen({ route, navigation }: Props) {
         // Commit BEFORE forgetting the attempt: a crash in between only means one more (DUPLICATE) retry.
         await localStore.commitReturnSeq(a.returnSeq);
         if (a.saleClientUuid) await localStore.markRefunded(a.saleClientUuid).catch(() => undefined);
+        // The cash paid back comes out of the open drawer's expected cash (idempotent by client_uuid).
+        await localStore
+          .recordLocalRefund({
+            clientUuid: a.clientUuid,
+            saleClientUuid: a.saleClientUuid,
+            invoiceNumber: 'invoice_number' in a.sale ? a.sale.invoice_number : a.label || null,
+            refundedAt: new Date().toISOString(),
+          })
+          .catch(() => undefined);
       }
       await clearPending();
       setPending(null);
@@ -175,7 +186,7 @@ export function RefundScreen({ route, navigation }: Props) {
   if (result) {
     const { res, seq } = result;
     return (
-      <Screen title="Refund recorded">
+      <Screen title="Refund recorded" contentStyle={styles.content}>
         <Card>
           <Text style={styles.big}>{res.invoice_number ?? (prefix ? formatInvoiceNumber(prefix, 'RETURN', seq) : '—')}</Text>
           {res.reference ? <Text style={styles.meta}>Reference {res.reference}</Text> : null}
@@ -193,7 +204,7 @@ export function RefundScreen({ route, navigation }: Props) {
   const predicted = prefix && seqShown !== null ? formatInvoiceNumber(prefix, 'RETURN', seqShown) : null;
 
   return (
-    <Screen title="Refund a sale">
+    <Screen title="Refund a sale" contentStyle={styles.content}>
       {!online ? <Banner kind="warning" title="Offline" message="Refunds need a connection. Try again when the device is online." style={styles.gap} /> : null}
       {online && !onlineSession ? (
         <Banner
@@ -254,10 +265,12 @@ export function RefundScreen({ route, navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const useStyles = makeStyles((c, t) => ({
   gap: { marginTop: spacing.sm, marginBottom: spacing.md },
-  big: { fontSize: font.huge, fontWeight: '700', color: colors.primary },
-  meta: { fontSize: font.small, color: colors.muted, marginTop: spacing.xs },
-  buttons: { flexDirection: 'row', gap: spacing.md },
+  // Keeps the form a readable width on a landscape tablet.
+  content: { width: '100%', maxWidth: 800, alignSelf: 'center' },
+  big: { ...t.display, color: c.primary, fontVariant: ['tabular-nums'] },
+  meta: { ...t.caption, marginTop: spacing.xs },
+  buttons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
   flex: { flex: 1 },
-});
+}));

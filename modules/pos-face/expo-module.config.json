@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["com.medsource.gamoterp.posface.PosFaceModule"]
+  }
+}
