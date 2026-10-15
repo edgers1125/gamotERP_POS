@@ -35,11 +35,17 @@ export interface BlockInputs {
   pendingSales: number;
   /** The license lease judged now (src/license/licenseEval.ts); null/absent = not checked. */
   license?: LicenseCode | null;
+  /** Android "Automatic date & time" is on (src/device/autoTime.ts). `false` blocks selling; absent = not checked. */
+  autoTimeOn?: boolean;
   now?: Date;
 }
 
 export const REVOKED_MESSAGE =
   'This device has been revoked. Selling is disabled — ask your administrator to enroll a new device.';
+
+// ---- device clock (docs/plans/pos-android-app.md "Device clock trust") ------------------------------------------------
+/** The text the Sell screen matches to show the "Open Date & time settings" button — keep it a single constant. */
+export const AUTO_TIME_OFF_MESSAGE = "Turn on Automatic date & time in the tablet's Settings to sell.";
 
 // ---- license lease (contract "License lease"; plan pos-license-and-billing-lock.md Part C) --------------------------
 export const LICENSE_EXPIRED_MESSAGE = 'License expired — connect to the internet to check in.';
@@ -159,9 +165,10 @@ export function attendanceBlockReason(input: Pick<BlockInputs, 'revoked' | 'upda
   return null;
 }
 
-/** Why selling is blocked right now, or null. Order: revoked, app update, subscription locked / license, offline limits. */
+/** Why selling is blocked right now, or null. Order: revoked, app update, automatic time off, subscription locked / license, offline limits. */
 export function blockReason(input: BlockInputs): string | null {
   if (input.revoked) return REVOKED_MESSAGE;
   if (input.updateRequired) return updateRequiredMessage(input.updateRequired);
+  if (input.autoTimeOn === false) return AUTO_TIME_OFF_MESSAGE;
   return licenseBlockReason(input.license) ?? offlineLimitReason(input);
 }

@@ -15,6 +15,7 @@ import { Banner, Button } from '../ui/components';
 import { makeStyles, useThemeColors } from '../ui/brandTheme';
 import { radius, shadow, spacing } from '../ui/theme';
 import { useCashier } from '../auth/cashierSession';
+import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
 import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, useCart } from '../sale/cart';
@@ -81,15 +82,15 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
     setBusy(true);
     setError(null);
     try {
-      // Re-check the promos NOW (the device clock — the same instant goes out as sold_at).
-      const soldAt = new Date();
+      // Re-check the promos NOW (device clock + server offset — the same instant goes out as sold_at).
+      const { at: soldAt, clock } = await stampClock();
       const promoChange = useCart.getState().refreshPromos(soldAt);
       if (promoChange) {
         setError(`${promoChange} Check the amount due and complete the sale again.`);
         setApproving(false);
         return;
       }
-      const sale = await completeSale({ state: useCart.getState(), payments: lines, methods, approval, online: sync.online, soldAt });
+      const sale = await completeSale({ state: useCart.getState(), payments: lines, methods, approval, online: sync.online, soldAt, clock });
       setApproving(false);
       navigation.replace('Receipt', { clientUuid: sale.client_uuid });
       useCart.getState().reset();

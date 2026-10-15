@@ -1,12 +1,13 @@
 // Records the sale: builds the SalePayload from the cart + tender and hands it to `localStore.recordSale`, which takes
 // the device's next invoice number, signs and saves the sale and enqueues its SALE op in ONE local transaction (so a
 // printed number is never lost, reused or skipped). Then a sync is kicked off (fire and forget — offline is fine).
-import type { PosApprovalKind, PosApprover, PosPaymentMethod, SaleClientPayload, SaleLinePayload, SalePayload } from '@pos-api/contract';
+import type { PosApprovalKind, PosApprover, PosClockReport, PosPaymentMethod, SaleClientPayload, SaleLinePayload, SalePayload } from '@pos-api/contract';
 import { normalizePhone } from '@shared/phone';
 import type { LocalSale } from '../contracts';
 import { api } from '../api/client';
 import { cashierSession } from '../auth/cashierSession';
 import { appVersionName } from '../config/runtime';
+import { stampClock } from '../device/clockStamp';
 import { localStore } from '../db/localStore';
 import { syncEngine } from '../sync/syncEngine';
 import { cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, type CartState } from './cart';
@@ -92,9 +93,13 @@ export async function completeSale(input: {
   approval: Approval | null;
   online: boolean;
   soldAt?: Date;
+  /** The clock report taken together with `soldAt` (src/device/clockStamp.ts); stamped here when absent. */
+  clock?: PosClockReport;
 }): Promise<LocalSale> {
   const { state, payments, methods, approval, online } = input;
-  const soldAt = input.soldAt ?? new Date();
+  // sold_at = device clock + the learned server offset (PosClockReport); the report rides along in the signed payload.
+  const stamp = input.soldAt && input.clock ? { at: input.soldAt, clock: input.clock } : await stampClock();
+  const soldAt = stamp.at;
   const cashier = cashierSession.current();
   if (!cashier) throw new Error('Sign in as a cashier first.');
   if (state.channelId === null) throw new Error('Choose the pricing channel.');
@@ -143,6 +148,7 @@ export async function completeSale(input: {
     catalog_version: catalogVersion,
     app_version: appVersion(),
     offline: !online,
+    clock: stamp.clock,
     pricing_channel_id: state.channelId,
     client: clientPayload(state),
     lines,

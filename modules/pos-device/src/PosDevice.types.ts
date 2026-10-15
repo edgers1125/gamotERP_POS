@@ -25,6 +25,20 @@ export interface PosDeviceInfo {
   strongBox: boolean;
 }
 
+export interface PosDeviceAutoTime {
+  /** Settings.Global.AUTO_TIME ("Automatic date & time") is on; false also when it could not be read. */
+  autoTime: boolean;
+  /** Settings.Global.AUTO_TIME_ZONE ("Automatic time zone") is on. */
+  autoTimeZone: boolean;
+}
+
+export interface PosDeviceClockAnchor {
+  /** SystemClock.elapsedRealtime() — ms since boot, monotonic, unaffected by wall-clock changes. */
+  elapsedRealtimeMs: number;
+  /** Reboot identity (Settings.Global.BOOT_COUNT as a string); null when unreadable (anchor unusable). */
+  bootId: string | null;
+}
+
 export interface PosDeviceNativeModule {
   /** Whether the device key (fixed alias) exists. */
   hasKey(): Promise<boolean>;
@@ -38,6 +52,12 @@ export interface PosDeviceNativeModule {
   sign(data: Uint8Array): Promise<string>;
   deleteKey(): Promise<void>;
   getDeviceInfo(): Promise<PosDeviceInfo>;
+  /** Android automatic date & time / time zone switches (src/device/autoTime.ts). */
+  getAutoTime(): Promise<PosDeviceAutoTime>;
+  /** Monotonic time + reboot identity for the server-clock anchor (src/device/serverClock.ts). */
+  getClockAnchor(): Promise<PosDeviceClockAnchor>;
+  /** Opens the system Date & time settings; false when it could not be opened. */
+  openDateSettings(): Promise<boolean>;
   /** Play Integrity standard request token for `requestHash` — null (never throws) when unavailable. */
   requestIntegrityToken(requestHash: string, cloudProjectNumber: string): Promise<string | null>;
 }

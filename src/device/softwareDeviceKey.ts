@@ -65,6 +65,20 @@ export const softwarePosDevice: PosDeviceNativeModule = {
     };
   },
 
+  // Expo Go preview cannot read the Android setting: treated as on (the preview is insecure anyway).
+  async getAutoTime() {
+    return { autoTime: true, autoTimeZone: true };
+  },
+
+  // Expo Go preview: no monotonic clock source — the wall clock stands in (insecure preview, like the rest).
+  async getClockAnchor() {
+    return { elapsedRealtimeMs: Date.now(), bootId: 'expo-go' };
+  },
+
+  async openDateSettings() {
+    return false;
+  },
+
   async requestIntegrityToken() {
     return null;
   },

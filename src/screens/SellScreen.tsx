@@ -14,6 +14,8 @@ import { Banner, Button } from '../ui/components';
 import { makeStyles } from '../ui/brandTheme';
 import { radius, shadow, spacing } from '../ui/theme';
 import { useCashier } from '../auth/cashierSession';
+import { AUTO_TIME_OFF_MESSAGE } from '../db/policy';
+import { autoTime } from '../device/autoTime';
 import { useSyncStatus } from '../sync/syncEngine';
 import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, useCart } from '../sale/cart';
 import { promosOf } from '../sale/promos';
@@ -239,7 +241,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
 
   return (
     <View style={styles.root}>
-      {blocked ? <Banner kind="danger" title={sync.subscriptionLocked ? 'Subscription locked — selling stopped' : 'Selling is paused'} message={blocked} style={styles.banner} /> : null}
+      {blocked ? <Banner kind="danger" title={sync.subscriptionLocked ? 'Subscription locked — selling stopped' : 'Selling is paused'} message={blocked} style={styles.banner} actionLabel={blocked === AUTO_TIME_OFF_MESSAGE ? 'Date & time settings' : undefined} onAction={blocked === AUTO_TIME_OFF_MESSAGE ? () => void autoTime.openSettings() : undefined} /> : null}
       {!blocked ? <DrawerGateBanner gate={drawer} style={styles.banner} /> : null}
       {!blocked && data.error ? <Banner kind="warning" message={data.error} style={styles.banner} /> : null}
       {!sync.online && !blocked ? (

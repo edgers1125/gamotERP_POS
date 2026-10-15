@@ -672,6 +672,7 @@ function onNetChange(state: NetInfoState): void {
 function onAppStateChange(s: AppStateStatus): void {
   if (s === 'active') {
     foreground = true;
+    void refreshStatus(); // re-reads Android's "Automatic date & time" (blockedReason) the moment the app returns
     void kick(); // the cycle re-opens the real-time socket (→ catch-up)
   } else if (s === 'background') {
     foreground = false;

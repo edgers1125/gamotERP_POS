@@ -34,6 +34,8 @@ import { businessDate } from '@shared/business-day';
 import { formatInvoiceNumber } from '@shared/invoice-number';
 
 import type { EnrollmentState, LocalSale, LocalStore } from '../contracts';
+import { autoTime } from '../device/autoTime';
+import { stampClock } from '../device/clockStamp';
 import { jose } from '../device/jose';
 import { EMPTY_LICENSE_RECORD, type LeaseIds, type LicenseEvaluation, type LicenseRecord } from '../license/lease';
 import { evaluateStoredLicense, FLOOR_PERSIST_STEP_MS } from '../license/licenseEval';
@@ -54,7 +56,7 @@ import { money } from '../sale/money';
 import { initDatabase, json, jsonOrNull, num, rows, str, strOrNull, withDb, type BatchCommand, type Conn, type Row } from './database';
 import { emitLocalStoreEvent } from './events';
 import { Mutex } from './mutex';
-import { APP_VERSION, blockReason, compareVersions, offlineWarning, UNKNOWN_MIN_VERSION } from './policy';
+import { APP_VERSION, AUTO_TIME_OFF_MESSAGE, blockReason, compareVersions, offlineWarning, UNKNOWN_MIN_VERSION } from './policy';
 
 const counterLock = new Mutex();
 
@@ -720,6 +722,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
           pendingOldestAt: pre.pending.oldestAt,
           pendingSales: pre.pending.offlineSales,
           license: pre.license,
+          autoTimeOn: await autoTime.isOn(),
         }) ?? drawerSellProblem(pre.drawer, pre.terminal.id);
       if (blocked) throw new Error(blocked);
 
@@ -780,6 +783,8 @@ export const localStore: LocalStore & LocalStoreExtras = {
     }));
     if (!pre.enrollment) throw new Error('This device is not enrolled.');
     if (pre.revoked) throw new Error('This device has been revoked.');
+    // Device clock trust: the void's time decides stock effects, so a tablet on a manual clock cannot void either.
+    if (!(await autoTime.isOn())) throw new Error(AUTO_TIME_OFF_MESSAGE);
     if (!pre.sale) throw new Error('Sale not found on this device');
     if (strOrNull(pre.sale.voided_at)) throw new Error('This sale is already voided');
     if (str(pre.sale.sync_status) === 'REJECTED') throw new Error('This sale was rejected by the server and cannot be voided');
@@ -976,7 +981,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
       if (!pre.enrollment || !pre.terminal) throw new Error('This device is not enrolled.');
       if (pre.revoked) throw new Error('This device has been revoked.');
       if (pre.open) throw new Error('A cash drawer is already open on this device — close it first.');
-      const openedAt = new Date().toISOString();
+      const openedAt = (await stampClock()).at.toISOString();
       const payload: DrawerOpenPayload = { cashier_user_id: input.cashierUserId, opened_at: openedAt, opening_float: openingFloat };
       const payloadJson = canonicalJson(payload);
       const signature = await jose.signOpPayload(payload);
@@ -1025,7 +1030,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
       if (!pre.enrollment) throw new Error('This device is not enrolled.');
       if (pre.revoked) throw new Error('This device has been revoked.');
       if (!pre.open || pre.open.client_uuid !== input.sessionUuid) throw new Error('This cash drawer is no longer open.');
-      const occurredAt = new Date().toISOString();
+      const occurredAt = (await stampClock()).at.toISOString();
       const payload: DrawerMovementPayload = {
         cashier_user_id: input.cashierUserId,
         session_client_uuid: input.sessionUuid,
@@ -1069,7 +1074,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
       const countedCash = drawerAmount(input.countedCash, 'counted cash', true);
       const note = input.note?.trim() || null;
       if (note && note.length > DRAWER_NOTE_MAX) throw new Error(`The note must be ${DRAWER_NOTE_MAX} characters or fewer.`);
-      const closedAt = new Date().toISOString();
+      const closedAt = (await stampClock()).at.toISOString();
       const pre = await withDb(async (conn) => {
         const p = await readDrawerPre(conn);
         const tally = p.open && p.open.client_uuid === input.sessionUuid ? await readDrawerTally(conn, p.open, closedAt) : null;
@@ -1185,6 +1190,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
         pendingOldestAt: pending.oldestAt,
         pendingSales: pending.offlineSales,
         license: (await judgeLicense(conn)).evaluation.code,
+        autoTimeOn: await autoTime.isOn(),
       });
     });
   },

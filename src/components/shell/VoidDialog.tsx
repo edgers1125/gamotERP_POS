@@ -7,6 +7,8 @@ import { KeyboardAvoidingView, Modal, ScrollView, Text, View } from 'react-nativ
 import type { PosApprover, VoidPayload } from '@pos-api/contract';
 import { businessDate } from '@shared/business-day';
 
+import { stampClock } from '../../device/clockStamp';
+
 import { useCashier } from '../../auth/cashierSession';
 import type { LocalSale } from '../../contracts';
 import { localStore } from '../../db/localStore';
@@ -55,7 +57,8 @@ export function VoidDialog({ sale, onClose, onVoided }: VoidDialogProps) {
       setError(problem);
       return;
     }
-    const now = new Date();
+    // voided_at = device clock + server offset, with the clock report (stamped now, signed into the op).
+    const { at: now, clock } = await stampClock();
     if (businessDate(new Date(sale.payload.sold_at)) !== businessDate(now)) {
       setError('This sale is from an earlier business day — refund it instead (needs a connection).');
       return;
@@ -64,6 +67,7 @@ export function VoidDialog({ sale, onClose, onVoided }: VoidDialogProps) {
       cashier_user_id: cashier.userId,
       sale_client_uuid: sale.client_uuid,
       voided_at: now.toISOString(),
+      clock,
       reason: value.reason.trim(),
       approval: { approved_by_user_id: value.approverId!, approval_code: value.code },
     };

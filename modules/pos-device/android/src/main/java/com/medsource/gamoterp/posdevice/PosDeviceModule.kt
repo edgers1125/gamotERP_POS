@@ -1,7 +1,10 @@
 package com.medsource.gamoterp.posdevice
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
+import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
@@ -116,6 +119,54 @@ class PosDeviceModule : Module() {
         "androidSdk" to Build.VERSION.SDK_INT,
         "strongBox" to strongBox,
       )
+    }
+
+    // Android "Automatic date & time" / "Automatic time zone" (Settings.Global.AUTO_TIME / AUTO_TIME_ZONE). A missing or
+    // unreadable setting counts as OFF (fail closed) — the app blocks selling while autoTime is false (src/device/autoTime.ts).
+    AsyncFunction("getAutoTime") {
+      val resolver = appContext.reactContext?.contentResolver
+      fun flag(name: String): Boolean =
+        try {
+          resolver != null && Settings.Global.getInt(resolver, name, 0) == 1
+        } catch (e: Exception) {
+          Log.w(TAG, "Could not read $name", e)
+          false
+        }
+      return@AsyncFunction mapOf(
+        "autoTime" to flag(Settings.Global.AUTO_TIME),
+        "autoTimeZone" to flag(Settings.Global.AUTO_TIME_ZONE),
+      )
+    }
+
+    // Monotonic clock anchor (src/device/serverClock.ts): SystemClock.elapsedRealtime() (ms since boot, includes deep sleep,
+    // NOT affected by anyone changing the wall clock) plus a boot identity = Settings.Global.BOOT_COUNT (counts reboots; a
+    // wall-clock-derived id would change when the clock is set, which is what must be detected). bootId is null when the
+    // count cannot be read — the app then treats the anchor as unusable.
+    AsyncFunction("getClockAnchor") {
+      val resolver = appContext.reactContext?.contentResolver
+      val bootCount: Int? =
+        try {
+          if (resolver != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) Settings.Global.getInt(resolver, Settings.Global.BOOT_COUNT) else null
+        } catch (e: Exception) {
+          Log.w(TAG, "Could not read BOOT_COUNT", e)
+          null
+        }
+      return@AsyncFunction mapOf(
+        "elapsedRealtimeMs" to SystemClock.elapsedRealtime().toDouble(),
+        "bootId" to bootCount?.toString(),
+      )
+    }
+
+    // Opens the system Date & time settings. Resolves false (never rejects) when it could not be opened.
+    AsyncFunction("openDateSettings") {
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      try {
+        context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return@AsyncFunction true
+      } catch (e: Exception) {
+        Log.w(TAG, "Could not open the Date & time settings", e)
+        return@AsyncFunction false
+      }
     }
 
     // Play Integrity standard request. Resolves null (never rejects) when Play Integrity is unavailable (no Play Store,
