@@ -7,7 +7,7 @@
 // module isn't built in (Expo Go) or no second display is connected.
 import PosDisplay from '../../modules/pos-display';
 import type { PosDisplayCartState, PosDisplayRow, PosDisplayThankYouState } from '../../modules/pos-display';
-import { cartTotals, chargedLineOf, isStatutoryLine, useCart, type CartState, type SaleClient } from '../sale/cart';
+import { cartTotals, chargedLineOf, isStatutoryLine, shownPrice, useCart, type CartState, type SaleClient } from '../sale/cart';
 import { formatPeso, round2 } from '../sale/money';
 import { statutoryTypeLabel } from '../sale/statutory';
 import { displayService } from './displayService';
@@ -35,9 +35,12 @@ function cartState(s: CartState): PosDisplayCartState {
     const computed = totals.lines[i];
     const discounts: PosDisplayRow[] = [];
     // A promo-priced line reads like the receipt: qty × regular price = regular amount, then "Promo: <name> −x".
+    // Prices as shown (VAT included on a vatable line in VAT-inclusive mode, `shownPrice`).
     const charged = chargedLineOf(s, l);
     const promo = charged.promoApplied && l.promo ? l.promo : null;
-    if (promo) discounts.push({ label: `Promo: ${promo.name}`, value: formatPeso(-round2(l.quantity * (l.unitPrice - charged.unitPrice))) });
+    const regularShown = shownPrice(s, l, l.unitPrice);
+    const chargedShown = shownPrice(s, l, charged.unitPrice);
+    if (promo) discounts.push({ label: `Promo: ${promo.name}`, value: formatPeso(-round2(l.quantity * (regularShown - chargedShown))) });
     const itemDiscount = totals.itemDiscountAmounts[i] ?? 0;
     if (itemDiscount > 0) {
       discounts.push({
@@ -50,8 +53,8 @@ function cartState(s: CartState): PosDisplayCartState {
     }
     return {
       name: l.name,
-      detail: `${l.quantity} × ${formatPeso(promo ? l.unitPrice : charged.unitPrice)}`,
-      amount: formatPeso(promo ? round2(l.quantity * l.unitPrice) : (computed?.lineSubtotal ?? 0)),
+      detail: `${l.quantity} × ${formatPeso(promo ? regularShown : chargedShown)}`,
+      amount: formatPeso(promo ? round2(l.quantity * regularShown) : (computed?.lineSubtotal ?? 0)),
       discounts,
     };
   });
@@ -62,7 +65,7 @@ function cartState(s: CartState): PosDisplayCartState {
   if (totals.transactionDiscountAmount > 0) rows.push({ label: 'Sale discount', value: formatPeso(-totals.transactionDiscountAmount), tone: 'discount' });
   if (totals.totalStatutoryDiscount > 0) rows.push({ label: `${statutoryLabel} 20%`, value: formatPeso(-totals.totalStatutoryDiscount), tone: 'discount' });
   if (totals.vatExemptSales > 0) rows.push({ label: 'VAT-exempt sales', value: formatPeso(totals.vatExemptSales), tone: 'muted' });
-  rows.push({ label: 'VAT (12%)', value: formatPeso(totals.totalVat), tone: 'muted' });
+  rows.push({ label: totals.pricesIncludeVat ? 'VAT included (12%)' : 'VAT (12%)', value: formatPeso(totals.totalVat), tone: 'muted' });
 
   const first = firstName(s.client);
   const count = s.lines.reduce((n, l) => n + l.quantity, 0);

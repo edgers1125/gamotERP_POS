@@ -1,5 +1,5 @@
-// The sale's figures, straight from the shared pricing code's result (src/sale/totals.ts). Prices are before VAT, so
-// VAT is added on top; Senior/PWD lines are VAT-exempt.
+// The sale's figures, straight from the shared pricing code's result (src/sale/totals.ts). A VAT-registered company's
+// prices include VAT (VAT row = the VAT inside the total); otherwise VAT is added on top. Senior/PWD lines are VAT-exempt.
 // With `saleDiscount` (the till), the sale-discount row is also where it's added/edited: an "+ Add sale discount" row
 // in its place in the totals when there's none, the applied row with "Edit" when there is one — so the entry point
 // sits exactly where the discount shows, never on a separate chip that can scroll or squeeze out of view.
@@ -100,7 +100,7 @@ export function TotalsSummary({
         <SummaryRow label={`${statutoryLabel ?? 'Senior/PWD'} 20%`} value={formatPeso(-totals.totalStatutoryDiscount)} tone="success" />
       ) : null}
       {totals.vatExemptSales > 0 ? <SummaryRow label="VAT-exempt sales" value={formatPeso(totals.vatExemptSales)} tone="muted" /> : null}
-      <SummaryRow label="VAT (12%)" value={formatPeso(totals.totalVat)} tone="muted" />
+      <SummaryRow label={totals.pricesIncludeVat ? 'VAT included (12%)' : 'VAT (12%)'} value={formatPeso(totals.totalVat)} tone="muted" />
       <SummaryRow label="Total" value={formatPeso(totals.grandTotal)} strong />
     </View>
   );

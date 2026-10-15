@@ -17,8 +17,9 @@ import { useCashier } from '../auth/cashierSession';
 import { AUTO_TIME_OFF_MESSAGE } from '../db/policy';
 import { autoTime } from '../device/autoTime';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, shownPrice, useCart } from '../sale/cart';
 import { promosOf } from '../sale/promos';
+import { pricesIncludeVatOf } from '../sale/totals';
 import { saleClientName } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
 import type { SaleStackParamList } from '../sale/navigation';
@@ -109,6 +110,10 @@ export function SellScreen({ navigation }: SellScreenProps) {
     // Not before the cached bootstrap is read (null while loading) — that would drop every line's promo (and choice).
     if (data.bootstrap) useCart.getState().setPromos(promos);
   }, [data.bootstrap, promos]);
+  // VAT-inclusive prices at a VAT-registered company (bootstrap receipt.vat_registered) — the web Branch Sales rule.
+  useEffect(() => {
+    if (data.bootstrap) useCart.getState().setPricesIncludeVat(pricesIncludeVatOf(data.bootstrap));
+  }, [data.bootstrap]);
   const hasLines = cart.lines.length > 0;
   useEffect(() => {
     if (!hasLines || promos.length === 0) return;
@@ -346,8 +351,8 @@ export function SellScreen({ navigation }: SellScreenProps) {
       <DiscountDialog
         visible={!!editingLine}
         title={editingLine ? `Item discount · ${editingLine.name}` : 'Item discount'}
-        base={editingLine ? editingLine.quantity * chargedLineOf(cart, editingLine).unitPrice : 0}
-        baseLabel={editingLine ? `Line subtotal (${editingLine.quantity} × ${formatPeso(chargedLineOf(cart, editingLine).unitPrice)})` : 'Line subtotal'}
+        base={editingLine ? editingLine.quantity * shownPrice(cart, editingLine, chargedLineOf(cart, editingLine).unitPrice) : 0}
+        baseLabel={editingLine ? `Line subtotal (${editingLine.quantity} × ${formatPeso(shownPrice(cart, editingLine, chargedLineOf(cart, editingLine).unitPrice))})` : 'Line subtotal'}
         notes={editingLine?.scPwdEligible ? ['Senior/PWD-eligible item: applying Senior/PWD to this sale replaces this discount with the 20%.'] : undefined}
         value={editingLine?.discount ?? { value: '', mode: 'amount' }}
         onSave={(d) => editingLine && cart.setLineDiscount(editingLine.skuId, d)}

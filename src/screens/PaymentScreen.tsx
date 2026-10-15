@@ -18,7 +18,7 @@ import { useCashier } from '../auth/cashierSession';
 import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, shownPrice, useCart } from '../sale/cart';
 import { completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
 import type { SaleStackParamList } from '../sale/navigation';
@@ -166,7 +166,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
                   </Text>
                   {charged.promoApplied && l.promo ? (
                     <Text style={styles.orderPromo}>
-                      Promo: {l.promo.name} · <Text style={styles.struck}>{formatPeso(l.unitPrice)}</Text> {formatPeso(charged.unitPrice)} each
+                      Promo: {l.promo.name} · <Text style={styles.struck}>{formatPeso(shownPrice(cart, l, l.unitPrice))}</Text> {formatPeso(shownPrice(cart, l, charged.unitPrice))} each
                       {choice === 'PROMO' ? ' · chosen over SC/PWD 20%' : ''}
                     </Text>
                   ) : null}

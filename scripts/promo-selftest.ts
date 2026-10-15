@@ -159,6 +159,7 @@ const sale = (rate: number | undefined, unit: number, statutory: boolean) =>
     [{ quantity: 2, unitPrice: unit, isVatable: true, isStatutory: statutory, ...(rate !== undefined ? { statutoryDiscountRate: rate } : {}), itemDiscount: NO_DISCOUNT }],
     NO_DISCOUNT,
     statutory,
+    false,
   );
 const regularPromo = sale(undefined, 219.35, false);
 check('promo price + 12% VAT: 2 × 219.35 = 438.70 + 52.64 = 491.34', regularPromo.grandTotal === 491.34 && regularPromo.totalVat === 52.64, regularPromo);

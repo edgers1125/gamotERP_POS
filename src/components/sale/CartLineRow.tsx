@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, spacing } from '../../ui/theme';
-import type { CartLine } from '../../sale/cart';
+import { shownPrice, useCart, type CartLine } from '../../sale/cart';
 import { formatPeso } from '../../sale/money';
 import { PROMO_LAW_NOTE, scPwdComparison, type ChargedLine, type PromoScPwdChoice } from '../../sale/promos';
 import { hasDiscount } from '../../sale/totals';
@@ -46,7 +46,11 @@ export function CartLineRow({
   const c = useThemeColors();
   const [qtyText, setQtyText] = useState(String(line.quantity));
   useEffect(() => setQtyText(String(line.quantity)), [line.quantity]);
-  const subtotal = line.quantity * charged.unitPrice;
+  // Prices as shown: VAT included on a vatable line in VAT-inclusive mode (cart.ts shownPrice).
+  const pricesIncludeVat = useCart((s) => s.pricesIncludeVat);
+  const regularShown = shownPrice({ pricesIncludeVat }, line, line.unitPrice);
+  const chargedShown = shownPrice({ pricesIncludeVat }, line, charged.unitPrice);
+  const subtotal = line.quantity * chargedShown;
   const promo = line.promo;
   // Senior/PWD sale + promo item: the cashier's choice (decision 6).
   const choosing = statutory && promo !== null;
@@ -67,10 +71,10 @@ export function CartLineRow({
           <Text style={styles.meta}>
             {charged.promoApplied ? (
               <>
-                <Text style={styles.regularStruck}>{formatPeso(line.unitPrice)}</Text> <Text style={styles.promoPrice}>{formatPeso(charged.unitPrice)}</Text>
+                <Text style={styles.regularStruck}>{formatPeso(regularShown)}</Text> <Text style={styles.promoPrice}>{formatPeso(chargedShown)}</Text>
               </>
             ) : (
-              formatPeso(charged.unitPrice)
+              formatPeso(chargedShown)
             )}{' '}
             each · {line.skuCode}
             {line.isVatable ? '' : ' · non-VAT'}

@@ -154,6 +154,7 @@ export async function completeSale(input: {
     lines,
     transaction_discount_amount: txHas ? (tx.percent != null ? '0.00' : money(tx.amount)) : '0.00',
     transaction_discount_percent: txHas && tx.percent != null ? percentText(tx.percent) : null,
+    prices_include_vat: state.pricesIncludeVat,
     transaction_discount_reason: txHas ? state.txDiscountReason.trim() || null : null,
     discount_approval: needsApproval && approval ? { approved_by_user_id: approval.approvedByUserId, approval_code: approval.approvalCode } : null,
     statutory_discount: state.statutory ? statutoryPayload(state.statutory) : null,

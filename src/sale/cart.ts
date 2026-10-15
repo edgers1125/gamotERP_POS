@@ -10,6 +10,7 @@ import * as Crypto from 'expo-crypto';
 import { isPhMobile, normalizePhone } from '@shared/phone';
 import type { PosCatalog, PosCatalogItem, PosClient, PosPromo } from '@pos-api/contract';
 import { computeCartTotals, discountInput, hasDiscount, NO_DISCOUNT, type DiscountDraft, type SaleTotals } from './totals';
+import { shownUnitPrice } from '@shared/vat-inclusive';
 import { isMoneyText, round2 } from './money';
 import { statutoryClientConflict, statutoryProblem, type StatutoryDraft } from './statutory';
 import {
@@ -88,6 +89,8 @@ export interface CartState {
   stock: Record<number, number>;
   /** The terminal's store promos (cached bootstrap `promos`; [] from an older server). Kept across sales. */
   promos: PosPromo[];
+  /** VAT-inclusive pricing (cached bootstrap receipt.vat_registered, `pricesIncludeVatOf`). Kept across sales. */
+  pricesIncludeVat: boolean;
 
   setChannel(channelId: number, catalog: PosCatalog | null, channelName?: string): void;
   /** Adds one unit; returns an error message when the item can't be sold at the channel. */
@@ -106,6 +109,8 @@ export interface CartState {
   applyCatalog(catalog: PosCatalog): void;
   /** New promos from the bootstrap — re-checks the lines at `at`. */
   setPromos(promos: PosPromo[], at?: Date): void;
+  /** The pricing mode from the bootstrap (true = prices shown and charged with VAT included). */
+  setPricesIncludeVat(on: boolean): void;
   /** Re-checks every line's promo at `at`; a change sets the notice. Returns that notice (null = nothing changed). */
   refreshPromos(at?: Date): string | null;
   /** The cashier's Promo-vs-SC/PWD choice on a line. */
@@ -186,6 +191,7 @@ export const useCart = create<CartState>()((set, get) => ({
   channelId: null,
   soldById: null,
   promos: [],
+  pricesIncludeVat: false,
   ...EMPTY,
 
   setChannel(channelId, catalog, channelName) {
@@ -307,6 +313,10 @@ export const useCart = create<CartState>()((set, get) => ({
     });
   },
 
+  setPricesIncludeVat(on) {
+    if (get().pricesIncludeVat !== on) systemUpdate(() => set({ pricesIncludeVat: on }));
+  },
+
   refreshPromos(at = new Date()) {
     const s = get();
     if (s.lines.length === 0) return null;
@@ -337,7 +347,7 @@ export function chargedLineOf(state: Pick<CartState, 'statutory'>, line: CartLin
   return chargedLine(line, isStatutoryLine(state, line));
 }
 
-export function cartTotals(state: Pick<CartState, 'lines' | 'txDiscount' | 'statutory'>): SaleTotals {
+export function cartTotals(state: Pick<CartState, 'lines' | 'txDiscount' | 'statutory' | 'pricesIncludeVat'>): SaleTotals {
   return computeCartTotals(
     state.lines.map((l) => {
       const charged = chargedLineOf(state, l);
@@ -352,7 +362,13 @@ export function cartTotals(state: Pick<CartState, 'lines' | 'txDiscount' | 'stat
     }),
     state.txDiscount,
     state.statutory !== null,
+    state.pricesIncludeVat,
   );
+}
+
+/** A before-VAT price as the cashier and customer see it: with VAT included on a vatable line in VAT-inclusive mode. */
+export function shownPrice(state: Pick<CartState, 'pricesIncludeVat'>, line: Pick<CartLine, 'isVatable'>, price: number): number {
+  return shownUnitPrice(price, line.isVatable, { pricesIncludeVat: state.pricesIncludeVat });
 }
 
 /** A discount a person chose (item or transaction) → the co-sign is required. The statutory 20% never needs one. */
@@ -377,7 +393,7 @@ export function discountProblem(state: Pick<CartState, 'lines' | 'txDiscount' | 
     }
     const p = discountTextProblem(l.discount);
     if (p) return `${l.name}: ${p}`;
-    if ((totals.itemDiscountAmounts[i] ?? 0) > round2(l.quantity * chargedLineOf(state, l).unitPrice)) return `${l.name}: the discount can’t exceed the line subtotal.`;
+    if ((totals.itemDiscountAmounts[i] ?? 0) > round2(l.quantity * (totals.lines[i]?.shownUnitPrice ?? chargedLineOf(state, l).unitPrice))) return `${l.name}: the discount can’t exceed the line subtotal.`;
   }
   if (state.statutory !== null && hasDiscount(state.txDiscount)) return 'A transaction discount can’t be combined with the Senior/PWD discount.';
   const tp = discountTextProblem(state.txDiscount);

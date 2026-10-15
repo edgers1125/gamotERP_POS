@@ -55,14 +55,24 @@ export interface SaleTotals extends MaterialIssuanceTotals {
  * item discount and, with any statutory line, the transaction discount is 0 (no double discount) — the caller already
  * clears those, this only makes sure nothing slips through.
  */
-export function computeCartTotals(lines: TotalsLineInput[], transactionDiscount: DiscountDraft, statutoryOn: boolean): SaleTotals {
+export function computeCartTotals(
+  lines: TotalsLineInput[],
+  transactionDiscount: DiscountDraft,
+  statutoryOn: boolean,
+  pricesIncludeVat: boolean,
+): SaleTotals {
+  // VAT-inclusive mode (a VAT-registered company, `pricesIncludeVatOf`): unit prices stay BEFORE VAT; the shared code
+  // shows/charges vatable lines at round(price × 1.12), discounts off those, VAT taken out once per receipt.
+  const mode = { pricesIncludeVat };
   const { itemDiscountAmounts, transactionDiscountAmount } = resolveMaterialIssuanceDiscounts(
     lines.map((l) => ({
       quantity: l.quantity,
       unitPrice: l.unitPrice,
+      isVatable: l.isVatable,
       itemDiscount: l.isStatutory ? { amount: 0, percent: null } : discountInput(l.itemDiscount),
     })),
     statutoryOn ? { amount: 0, percent: null } : discountInput(transactionDiscount),
+    mode,
   );
   const totals = computeMaterialIssuanceTotals(
     lines.map((l, idx) => ({
@@ -74,8 +84,16 @@ export function computeCartTotals(lines: TotalsLineInput[], transactionDiscount:
       ...(l.statutoryDiscountRate !== undefined ? { statutoryDiscountRate: l.statutoryDiscountRate } : {}),
     })),
     transactionDiscountAmount,
+    mode,
   );
   return { ...totals, itemDiscountAmounts };
+}
+
+/** A new sale's pricing mode: the cached bootstrap's receipt.vat_registered (field absent = registered, the server's
+ * default). Never derived from anything else (backend docs/claude/pos-android.md "VAT-inclusive prices"). */
+export function pricesIncludeVatOf(bootstrap: { receipt?: unknown } | null | undefined): boolean {
+  const r = (bootstrap?.receipt ?? null) as { vat_registered?: unknown } | null;
+  return r !== null && r.vat_registered !== false;
 }
 
 /** The payload's `totals` block (strings, 2 decimals). */
@@ -116,5 +134,7 @@ export function computePayloadTotals(
       ? { value: payload.transaction_discount_percent!, mode: 'percent' }
       : { value: payload.transaction_discount_amount ?? '', mode: 'amount' },
     statutoryOn,
+    // The mode the sale was charged in (absent = before-VAT: recorded by an older app version).
+    payload.prices_include_vat ?? false,
   );
 }

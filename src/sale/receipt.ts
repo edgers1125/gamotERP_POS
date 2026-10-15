@@ -23,6 +23,7 @@ import {
   type ReceiptProviderDetails,
   type ReceiptSource,
 } from '@shared/receipt-layout';
+import { shownUnitPrice } from '@shared/vat-inclusive';
 import type { PosBootstrap, PosCatalog, PosPaymentMethod } from '@pos-api/contract';
 import type { LocalSale } from '../contracts';
 import { localStore } from '../db/localStore';
@@ -144,6 +145,7 @@ export function buildReceipt(
     return c ? { name: c.final_name, isVatable: c.is_vatable, scPwdEligible: c.sc_pwd_eligible } : { name: `SKU #${skuId}`, isVatable: true, scPwdEligible: false };
   };
   const totals = computePayloadTotals(p, (id) => infoOf(id));
+  const mode = { pricesIncludeVat: p.prices_include_vat ?? false };
   const statutory = p.statutory_discount ?? null;
   const methods = new Map([...(bootstrap?.payment_methods ?? []), ...(catalog?.payment_methods ?? []), ...(snap?.paymentMethods ?? [])].map((m) => [m.id, m]));
   const terminal = bootstrap?.terminal ?? null;
@@ -181,10 +183,11 @@ export function buildReceipt(
           ? (snapById.get(l.sku_id)?.promoName ?? promosOf(bootstrap).find((pr) => pr.id === l.promo_id)?.name ?? 'Store promo')
           : null;
       return {
-        promo: promoName !== null ? { name: promoName, regularUnitPrice: toCents(Number(l.regular_unit_price)) } : null,
+        // A VAT-inclusive sale prints the prices as shown and charged (the payload's are before VAT) — as the server's receipt.
+        promo: promoName !== null ? { name: promoName, regularUnitPrice: toCents(shownUnitPrice(Number(l.regular_unit_price), c.isVatable, mode)) } : null,
         name: infoOf(l.sku_id).name,
         quantity: l.quantity,
-        unitPrice: toCents(Number(l.unit_price)),
+        unitPrice: toCents(c.shownUnitPrice),
         itemDiscount: toCents(c.itemDiscountAmount),
         statutoryDiscount: toCents(c.statutoryDiscountAmount),
         taxableBase: toCents(c.taxableBase),
@@ -194,6 +197,7 @@ export function buildReceipt(
         isStatutory: c.isStatutory,
       };
     }),
+    pricesIncludeVat: mode.pricesIncludeVat,
     // The payload's own totals — what the server stores.
     totalVat: toCents(Number(p.totals.total_vat)),
     grandTotal: toCents(Number(p.totals.grand_total)),
