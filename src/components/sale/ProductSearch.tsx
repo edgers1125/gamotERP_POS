@@ -5,12 +5,13 @@
 // code first, then adds the only match. The Scan button opens a small camera panel right under the search box (the
 // grid moves down; the cart on the right is never covered).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Pressable, Text, TextInput, View } from 'react-native';
+import { Alert, FlatList, Pressable, Text, TextInput, View } from 'react-native';
 import type { PosCatalog, PosCatalogItem } from '@pos-api/contract';
 import { Button } from '../../ui/components';
 import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, shadow, spacing } from '../../ui/theme';
-import { findByBarcode, groupByModel, searchCatalog, type CatalogGroup } from '../../sale/catalogSearch';
+import { findByBarcode, findBySkuCode, groupByModel, hasBarcode, searchCatalogStrict, type CatalogGroup } from '../../sale/catalogSearch';
+import { useCashier } from '../../auth/cashierSession';
 import { priceAt } from '../../sale/cart';
 import { formatPeso } from '../../sale/money';
 import { BarcodeScannerPanel, type ScanOutcome } from './BarcodeScannerPanel';
@@ -40,6 +41,7 @@ export function ProductSearch({
   channelId,
   channelName,
   onAdd,
+  lineCount = 0,
   disabled,
 }: {
   catalog: PosCatalog | null;
@@ -47,10 +49,21 @@ export function ProductSearch({
   channelName: string;
   /** Adds one unit; returns an error message when it can't. */
   onAdd: (item: PosCatalogItem) => string | null;
+  /** Lines in the cart; override switches off again when the sale ends (cart back to empty). */
+  lineCount?: number;
   disabled?: boolean;
 }) {
   const styles = useStyles();
   const theme = useThemeColors();
+  const canOverride = useCashier((s) => s.cashier?.permissions.includes('itemtracker.pickoverride') ?? false);
+  const [overrideOn, setOverrideOn] = useState(false);
+  const override = canOverride && overrideOn;
+  // The sale ended (cart went back to empty): override is per sale, so it switches off (render-time state adjustment).
+  const [prevCount, setPrevCount] = useState(lineCount);
+  if (prevCount !== lineCount) {
+    setPrevCount(lineCount);
+    if (lineCount === 0) setOverrideOn(false);
+  }
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PosCatalogItem[]>([]);
   const [message, setMessage] = useState<ScanOutcome | null>(null);
@@ -63,19 +76,19 @@ export function ProductSearch({
   useEffect(() => {
     const mine = ++seq.current;
     if (query.trim() === '') {
-      // Nothing typed: the whole cached catalog, grouped.
-      setResults(catalog?.items ?? []);
+      // Nothing typed: the cached catalog, grouped — without barcode items unless override is on.
+      setResults(override ? (catalog?.items ?? []) : (catalog?.items ?? []).filter((i) => !hasBarcode(i)));
       return;
     }
     const t = setTimeout(() => {
-      searchCatalog(query, catalog, SEARCH_LIMIT)
+      searchCatalogStrict(query, catalog, override, SEARCH_LIMIT)
         .then((rows) => {
           if (mine === seq.current) setResults(rows);
         })
         .catch(() => undefined);
     }, 150);
     return () => clearTimeout(t);
-  }, [query, catalog]);
+  }, [query, catalog, override]);
 
   const groups = useMemo(() => groupByModel(results), [results]);
 
@@ -86,20 +99,58 @@ export function ProductSearch({
     return outcome;
   }
 
+  /** Barcode-item confirmation: name, strength / variant and pack, before it goes in the cart. */
+  function confirmAdd(item: PosCatalogItem): Promise<boolean> {
+    return new Promise((resolve) => {
+      const detail = item.variant_label && item.variant_label !== item.final_name ? `${item.variant_label}\n` : '';
+      Alert.alert(
+        'Add this item?',
+        `${item.final_name}\n${detail}Pack: ${item.pack_quantity} pcs\nSKU ${item.sku_code}`,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Add', onPress: () => resolve(true) },
+        ],
+        { cancelable: false },
+      );
+    });
+  }
+
+  /** Scan or exact SKU code of an item: confirm (if it has a barcode), then add. */
+  async function addPicked(item: PosCatalogItem): Promise<ScanOutcome> {
+    if (hasBarcode(item) && !(await confirmAdd(item))) return { ok: false, message: 'Not added.' };
+    return add(item);
+  }
+
   async function lookup(code: string): Promise<ScanOutcome> {
     const hit = await findByBarcode(code, catalog);
     if (!hit) return { ok: false, message: `No item has the barcode ${code}.` };
-    return add(hit);
+    return addPicked(hit);
   }
 
   async function submit() {
     const text = query.trim();
     if (text === '' || disabled) return;
+    // A USB/Bluetooth scanner types the barcode + Enter: exact barcode, then exact SKU code (never a prefix).
     const hit = await findByBarcode(text, catalog);
     if (hit) {
-      add(hit);
+      setMessage(await addPicked(hit));
       setQuery('');
-    } else if (results.length === 1) {
+      inputRef.current?.focus();
+      return;
+    }
+    const byCode = findBySkuCode(text, catalog);
+    if (byCode === 'many') {
+      setMessage({ ok: false, message: 'More than one item has this SKU code — scan its barcode instead.' });
+      inputRef.current?.focus();
+      return;
+    }
+    if (byCode) {
+      setMessage(await addPicked(byCode));
+      setQuery('');
+      inputRef.current?.focus();
+      return;
+    }
+    if (results.length === 1) {
       add(results[0]!);
       setQuery('');
     } else if (groups.length === 1) {
@@ -141,7 +192,7 @@ export function ProductSearch({
           }}
           onSubmitEditing={() => void submit()}
           submitBehavior="submit"
-          placeholder="Search name, SKU code or scan a barcode"
+          placeholder="Search name, type exact SKU code or scan"
           placeholderTextColor={theme.muted}
           autoCorrect={false}
           autoCapitalize="none"
@@ -156,6 +207,16 @@ export function ProductSearch({
           onPress={() => setScannerOpen((open) => !open)}
           disabled={disabled && !scannerOpen}
         />
+      </View>
+      <View style={styles.modeRow}>
+        <Text style={styles.modeHint}>
+          {override
+            ? 'Override ON for this sale: items with a barcode can be found by name.'
+            : 'Items with a barcode: scan it or type the exact SKU code. Name search shows items without one.'}
+        </Text>
+        {canOverride ? (
+          <Button title={override ? 'Override off' : 'Override'} variant={override ? 'primary' : 'secondary'} compact onPress={() => setOverrideOn((v) => !v)} disabled={disabled} />
+        ) : null}
       </View>
       {scannerOpen && !disabled ? <BarcodeScannerPanel onClose={() => setScannerOpen(false)} onScanned={lookup} /> : null}
       {message && !scannerOpen ? <Text style={[styles.message, { color: message.ok ? theme.success : theme.danger }]}>{message.message}</Text> : null}
@@ -240,6 +301,8 @@ const useStyles = makeStyles((c, t) => ({
   // 2px primary while focused (MUI outlined); padding drops by 1 so the text doesn't move.
   inputFocused: { borderWidth: 2, borderColor: c.primary, paddingHorizontal: spacing.md - 1 },
   inputDisabled: { backgroundColor: c.surfaceMuted, borderColor: c.border, color: c.muted },
+  modeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
+  modeHint: { ...t.caption, flex: 1 },
   message: { ...t.caption, fontFamily: t.bodyStrong.fontFamily, fontSize: 14, marginBottom: spacing.sm },
   empty: { ...t.body, color: c.muted, padding: spacing.lg, textAlign: 'center' },
   tile: {

@@ -25,7 +25,7 @@ export function BarcodeScannerPanel({
   onScanned,
 }: {
   onClose: () => void;
-  /** Handles one scanned code (adds the item) and says what happened. */
+  /** Handles one scanned code (cashier confirms, then the item is added) and says what happened; further scans wait for it. */
   onScanned: (code: string) => Promise<ScanOutcome>;
 }) {
   const styles = useStyles();
