@@ -3,7 +3,8 @@
 //     turns, START hold, several faces, timeouts, the report);
 //   * src/attendance/punch.ts — device challenges, the payload the server's posPunchPayloadSchema accepts, the signed
 //     canonical text, the queue row's frames column (serialisation round trip + tamper detection), the upload parts and
-//     the confirmation wording.
+//     the confirmation wording; punch kinds (break / transport — which buttons, the suggestion, the offline flip) and the
+//     online face-check refusal that is discarded.
 //
 // Run from the app root (the repo has no test runner; tsx resolves the @pos-api alias from tsconfig.json):
 //   ../GamotERP/apps/pharma/backend/node_modules/.bin/tsx --tsconfig ./tsconfig.json scripts/attendance-selftest.ts
@@ -12,17 +13,23 @@ import { canonicalJson, type AttendanceLivenessStep, type PosAttendancePunchPayl
 
 import { DEFAULT_TUNING, LivenessRun, OWN_LEFT_YAW_SIGN, type FaceSampleLike } from '../src/attendance/liveness';
 import {
+  afterPunch,
   buildPunchPayload,
   deviceChallenge,
+  discardsRefusal,
   framesFromJson,
   framesToJson,
   isLivenessRefusal,
+  PUNCH_KINDS,
+  punchKindsFor,
   punchMessage,
   punchPayloadProblem,
   punchPayloadText,
   punchUploadParts,
   randomIntFromBytes,
   storedPunchProblem,
+  suggestedKindOf,
+  workStatusOf,
   type BuildPunchInput,
   type QueuedFrame,
 } from '../src/attendance/punch';
@@ -285,6 +292,42 @@ const base: BuildPunchInput = {
   const text = punchPayloadText(offline);
   check('signed text = canonicalJson(JSON.parse(text))', canonicalJson(JSON.parse(text)) === text);
   check('signed text has sorted keys', text.startsWith('{"app_version":'));
+
+  // Every punch kind the server takes (app 1.3.0) builds; anything else is refused before it is queued.
+  for (const k of PUNCH_KINDS) check(`kind ${k} builds`, punchPayloadProblem(buildPunchPayload({ ...base, kind: k })) === null);
+  check('refuses an unknown kind', throws(() => buildPunchPayload({ ...base, kind: 'LUNCH' as never })));
+}
+
+// ---- punch kinds: buttons, suggestion, offline flip (mirror of GamotERP countable.ts + the web kiosk) -------------
+
+{
+  const single = { suggested_kind: 'IN' as const, last_kind: null, multi_branch: false };
+  const multi = { ...single, multi_branch: true };
+  check('single-branch: no transport buttons', punchKindsFor(single).join() === 'IN,OUT,BREAK_OUT,BREAK_IN', punchKindsFor(single));
+  check('multi-branch: all six kinds', punchKindsFor(multi).length === 6);
+  check('older server (no multi_branch): no transport', punchKindsFor({ suggested_kind: 'IN' }).every((k) => !k.startsWith('TRANSPORT')));
+  check('nothing yet → IN', suggestedKindOf(single) === 'IN');
+  check('server OUT → OUT', suggestedKindOf({ ...single, suggested_kind: 'OUT', last_kind: 'IN' }) === 'OUT');
+  check('after BREAK_OUT → BREAK_IN', suggestedKindOf({ ...single, last_kind: 'BREAK_OUT' }) === 'BREAK_IN');
+  check('after TRANSPORT_OUT (multi) → TRANSPORT_IN', suggestedKindOf({ ...multi, suggested_kind: 'OUT', last_kind: 'TRANSPORT_OUT' }) === 'TRANSPORT_IN');
+  check('after TRANSPORT_OUT but no longer multi → server kind', suggestedKindOf({ ...single, suggested_kind: 'OUT', last_kind: 'TRANSPORT_OUT' }) === 'OUT');
+  // Offline flip: the cached entry follows the punch (countable.ts onTheClockAfter).
+  const flips: [string, string, string][] = [
+    ['IN', 'OUT', 'OUT'],
+    ['OUT', 'IN', 'IN'],
+    ['BREAK_OUT', 'IN', 'BREAK_IN'],
+    ['BREAK_IN', 'OUT', 'OUT'],
+    ['TRANSPORT_OUT', 'OUT', 'TRANSPORT_IN'],
+    ['TRANSPORT_IN', 'OUT', 'OUT'],
+  ];
+  for (const [k, serverKind, next] of flips) {
+    const e = afterPunch({ ...multi, user_id: 7 }, k as never);
+    check(`after ${k}: suggested_kind ${serverKind}, next ${next}`, e.suggested_kind === serverKind && e.last_kind === k && suggestedKindOf(e) === next && e.user_id === 7, e);
+  }
+  check('grid: on break', workStatusOf({ ...single, last_kind: 'BREAK_OUT' }) === 'On break');
+  check('grid: at work', workStatusOf({ ...single, suggested_kind: 'OUT', last_kind: 'BREAK_IN' }) === 'At work');
+  check('grid: travelling (multi)', workStatusOf({ ...multi, suggested_kind: 'OUT', last_kind: 'TRANSPORT_OUT' }) === 'Travelling');
+  check('grid: off', workStatusOf({ ...single, last_kind: 'OUT' }) === '');
 }
 
 // ---- queue row: frames column + tamper detection -----------------------------------------------------------------
@@ -309,15 +352,21 @@ const base: BuildPunchInput = {
   check('upload files frame0..2 in order', parts.files.map((f) => f.name).join() === 'frame0,frame1,frame2' && parts.files.every((f) => f.type === 'image/jpeg'));
 }
 
-// ---- liveness refusal (server 2.28: online punch without a passed face check) ----------------------------------------
+// ---- liveness refusal (server 2.28: online punch without a passed face check) — discarded since 1.3.0 ------------------
 
-check('LIVENESS_FAILED rejection is recognised', isLivenessRefusal({ status: 'REJECTED', result: { status: 'REJECTED', code: 'LIVENESS_FAILED' } }));
+check('online 422 LIVENESS_FAILED is discarded', discardsRefusal(true, 422, 'LIVENESS_FAILED'));
+check('offline 422 LIVENESS_FAILED is kept', !discardsRefusal(false, 422, 'LIVENESS_FAILED'));
+check('other online refusals are kept', !discardsRefusal(true, 422, null) && !discardsRefusal(true, 400, 'TRANSPORT_NOT_ALLOWED') && !discardsRefusal(true, 409, 'NOT_SET_UP'));
+check('a DISCARDED LIVENESS_FAILED attempt is recognised', isLivenessRefusal({ status: 'DISCARDED', result: { status: 'REJECTED', code: 'LIVENESS_FAILED' } }));
+check('a kept REJECTED one is not (no retry loop on old rows)', !isLivenessRefusal({ status: 'REJECTED', result: { status: 'REJECTED', code: 'LIVENESS_FAILED' } }));
 check('another rejection is not', !isLivenessRefusal({ status: 'REJECTED', result: { status: 'REJECTED', code: 'PIN_INVALID' } }) && !isLivenessRefusal({ status: 'REJECTED', result: null }));
 check('a recorded punch / null is not', !isLivenessRefusal({ status: 'RECORDED', result: { code: 'LIVENESS_FAILED' } }) && !isLivenessRefusal(null));
 
 // ---- wording ----------------------------------------------------------------------------------------------------
 
 check('Time in recorded 8:02 AM', punchMessage('IN', new Date('2026-10-05T00:02:00Z'), 'RECORDED') === 'Time in recorded 8:02 AM', punchMessage('IN', new Date('2026-10-05T00:02:00Z'), 'RECORDED'));
+check('Break out recorded 12:01 PM', punchMessage('BREAK_OUT', new Date('2026-10-05T04:01:00Z'), 'RECORDED') === 'Break out recorded 12:01 PM');
+check('Transport in saved 2:15 PM', punchMessage('TRANSPORT_IN', new Date('2026-10-05T06:15:00Z'), 'SAVED_ON_TABLET') === 'Transport in saved 2:15 PM');
 check('Time out recorded 5:30 PM', punchMessage('OUT', new Date('2026-10-05T09:30:00Z'), 'RECORDED') === 'Time out recorded 5:30 PM', punchMessage('OUT', new Date('2026-10-05T09:30:00Z'), 'RECORDED'));
 
 console.log(`${checks - failures}/${checks} checks passed`);

@@ -47,8 +47,18 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   signed with the revoked enrollment's key, which re-enrolling deletes — the server then refuses them (signature) and
   they show as "Not accepted" for HR to enter by hand. A revoked device can't upload them either (401), so Settings
   doesn't block re-enroll — its confirmation states the count (`unsentPunchCount`) and what happens.
-- **Flow** (`src/screens/AttendanceKioskScreen.tsx`): name grid (initials, search) → Time in / Time out (the server's
-  `suggested_kind` big; flipped locally after a punch until the next list) → PIN pad **online only** (`POST
+- **Punch kinds** (app 1.3.0, user "go build" 2026-10-22; GamotERP `lib/attendance/countable.ts` = THE rule, mirrored in
+  `punch.ts` because that file imports Prisma): Time in / Time out, **Break out / Break in** (lunch, everyone — not
+  counted) and **Transport out / Transport in** (travel between branches, counted) ONLY for `multi_branch` employees
+  (`punchKindsFor`; absent = false). Suggested (big button) = `suggestedKindOf`: BREAK_IN after BREAK_OUT, TRANSPORT_IN
+  after TRANSPORT_OUT (multi-branch), else the server's `suggested_kind`; every other allowed kind is a smaller button
+  below. After a punch the cached entry follows (`afterPunch`: `last_kind` = the punch, `suggested_kind` OUT when still on
+  the clock) until the next list — so offline it suggests right too. Grid line: "At work" / "On break" / "Travelling"
+  (`workStatusOf`). Server 400 `TRANSPORT_NOT_ALLOWED` at the PIN step → its message + list re-read; at upload → kept as
+  REJECTED. `attendance_punches.kind` CHECK widened by local migration v5. **Release: backend first** — against an older server (no
+  `last_kind` / `multi_branch`, IN/OUT-only schema) the break buttons still show but the PIN step refuses a break punch
+  (400, shown); IN/OUT keep working. Older apps (≤ 1.2.0) against the new server: unchanged (IN/OUT only).
+- **Flow** (`src/screens/AttendanceKioskScreen.tsx`): name grid (initials, search) → the kind (above) → PIN pad **online only** (`POST
   /pos/attendance/pin` → ticket + the server's challenge; not set up → "ask HR", no punch; a network failure here →
   continues offline; 403 `SUBSCRIPTION_LOCKED` → paused, see Lock) → camera (`LivenessCapture`) → saved + sent → "Time in recorded 8:02 AM" → list after 5 s. Idle
   45 s → back to the list. **Offline:** no PIN step (it can't be checked; the server flags `PIN_NOT_CHECKED`), a device
@@ -75,9 +85,12 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   ≤ 12 s for the answer) sends PENDING rows oldest first as multipart (`punch` = the stored signed text, never
   re-serialised; `signature`; `frame0..n` straight from disk): RECORDED / DUPLICATE → done + photos deleted from the
   tablet; 422 REJECTED, 404 (person no longer active), 400/409/413/415, a stored row that no longer matches its signature or a missing photo → kept as
-  REJECTED (with photos; never retried) and listed on the kiosk ("Not accepted: N"). A ticketed punch rejected with
-  `LIVENESS_FAILED` (`isLivenessRefusal`, punch.ts; code kept in the stored result) is NOT shown as "tell your manager":
-  the kiosk shows the server's message and returns to the camera with the SAME ticket + steps (still listed under "Not accepted"); network / 5xx / 401 / 429 → stays PENDING (engine
+  REJECTED (with photos; never retried) and listed on the kiosk ("Not accepted: N"). An ONLINE (ticketed) punch refused
+  with 422 `LIVENESS_FAILED` is **DISCARDED** (user decision 2026-10-22, `discardsRefusal` / `markDiscarded`): status
+  DISCARDED, photos deleted at once, not counted, not listed under "Not accepted" (nothing was stored on the server; the
+  ticket is still unused); the kiosk shows the server's message and returns to the camera with the SAME ticket + steps
+  (`isLivenessRefusal` = DISCARDED + that code). Migration v5 also discards 1.2.0's kept rows of that kind. An offline
+  punch is never discarded; network / 5xx / 401 / 429 → stays PENDING (engine
   backoff); 403 `ATTENDANCE_KIOSK_OFF` → stays PENDING, retried after 15 min or once the kiosk answers ON. Leftover frame
   files (abandoned captures) are pruned after 10 min. The kiosk header shows "Unsent punches: N". Punches are NOT in the
   sales outbox / heartbeat `pending_ops`.
@@ -88,4 +101,4 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   module is absent: punches are recorded without photos (`ENGINE_FAILED`). Kotlin compile check:
   `cd android && ./gradlew :pos-face:compileDebugKotlin`.
 - Self-test: `../GamotERP/apps/pharma/backend/node_modules/.bin/tsx --tsconfig ./tsconfig.json scripts/attendance-selftest.ts`
-  (evaluator with made-up face data, payload / queue serialisation, wording).
+  (evaluator with made-up face data, payload / queue serialisation, punch kinds + suggestion + offline flip, the discarded online refusal, wording).

@@ -11,8 +11,9 @@
 //   PENDING rows oldest first, one multipart POST each, idempotent by client_uuid (a repeat answers DUPLICATE):
 //   RECORDED / DUPLICATE → done, photos deleted from the tablet; 422 REJECTED, 404 (person no longer active) and
 //   400/409/413/415 → kept (photos too) for a manager, never retried (they'd fail identically); a 422 LIVENESS_FAILED
-//   (an ONLINE punch whose face check wasn't passed — server 2.28+) keeps its code in the result so the kiosk can offer
-//   "try again" with the same ticket (`isLivenessRefusal`);
+//   of an ONLINE punch (face check not passed — server 2.28+; nothing stored there, the ticket still unused) →
+//   DISCARDED: photos deleted at once, not counted / listed as "Not accepted" (user decision 2026-10-22), the code kept
+//   in the result so the kiosk offers "try again" with the same ticket (`isLivenessRefusal`). Offline refusals are kept.
 //   network / 5xx / 401 / 429 → stays PENDING and the engine backs off; 403 ATTENDANCE_KIOSK_OFF → stays PENDING (the
 //   server refuses uploads from a terminal that is no longer a kiosk — see CLAUDE.md "open issues").
 import * as Crypto from 'expo-crypto';
@@ -23,6 +24,7 @@ import type {
   PosAttendanceEmployee,
   PosAttendanceKiosk,
   PosAttendancePunchResult,
+  PosPunchKind,
 } from '@pos-api/contract';
 
 import PosFace from '../../modules/pos-face';
@@ -34,9 +36,11 @@ import { Mutex } from '../db/mutex';
 import { jose } from '../device/jose';
 import { serverClock } from '../device/serverClock';
 import {
+  afterPunch,
   buildPunchPayload,
   DEFAULT_CAPTURE,
   deviceChallenge,
+  discardsRefusal,
   framesFromJson,
   framesToJson,
   isLivenessRefusal,
@@ -181,10 +185,11 @@ export interface LocalPunch {
   clientUuid: string;
   userId: number;
   displayName: string;
-  kind: 'IN' | 'OUT';
+  kind: PosPunchKind;
   deviceTime: string;
   online: boolean;
-  status: 'PENDING' | 'RECORDED' | 'REJECTED';
+  /** DISCARDED = an online attempt the server's face check refused (photos deleted; not a "Not accepted" entry). */
+  status: 'PENDING' | 'RECORDED' | 'REJECTED' | 'DISCARDED';
   result: PosAttendancePunchResult | null;
   lastError: string | null;
   attempts: number;
@@ -195,7 +200,7 @@ function punchFromRow(r: Row): LocalPunch {
     clientUuid: str(r.client_uuid),
     userId: num(r.user_id),
     displayName: str(r.display_name),
-    kind: str(r.kind) as 'IN' | 'OUT',
+    kind: str(r.kind) as PosPunchKind,
     deviceTime: str(r.device_time),
     online: num(r.online) === 1,
     status: str(r.status) as LocalPunch['status'],
@@ -210,7 +215,7 @@ export type CapturedPunchFrame = QueuedFrame;
 
 export interface RecordPunchInput {
   employee: { user_id: number; display_name: string };
-  kind: 'IN' | 'OUT';
+  kind: PosPunchKind;
   /** From POST /pos/attendance/pin (online); null = offline punch. */
   ticket: { ticket: string; steps: AttendanceLivenessStep[] } | null;
   /** The device challenge that was run offline (ignored with a ticket). */
@@ -235,7 +240,7 @@ export function newDeviceChallenge(): AttendanceLivenessStep[] {
 
 /**
  * Signs and saves a punch (with its photo files) on this tablet — the punch exists from here on, whatever happens to
- * the upload. Returns the saved punch (PENDING). Also flips the cached suggestion for that employee (IN → OUT).
+ * the upload. Returns the saved punch (PENDING). Also updates the cached suggestion for that employee (afterPunch).
  */
 export function recordPunch(input: RecordPunchInput): Promise<LocalPunch> {
   return recordLock.run(async () => {
@@ -301,12 +306,12 @@ export function recordPunch(input: RecordPunchInput): Promise<LocalPunch> {
   });
 }
 
-/** After a punch: suggest the other kind for that person until the server's list says otherwise. */
-async function flipSuggestion(userId: number, kind: 'IN' | 'OUT'): Promise<void> {
+/** After a punch: the cached last kind + suggestion for that person (punch.ts afterPunch) until the server's list says otherwise. */
+async function flipSuggestion(userId: number, kind: PosPunchKind): Promise<void> {
   const s = useAttendanceKiosk.getState();
   const deviceId = await currentDeviceId();
   if (deviceId === null || s.mode !== 'ON') return;
-  const employees = s.employees.map((e) => (e.user_id === userId ? { ...e, suggested_kind: kind === 'IN' ? ('OUT' as const) : ('IN' as const) } : e));
+  const employees = s.employees.map((e) => (e.user_id === userId ? afterPunch(e, kind) : e));
   await saveCache(deviceId, { enabled: true, reason: null, kiosk: s.kiosk, employees });
 }
 
@@ -354,6 +359,37 @@ async function markRejected(seq: number, clientUuid: string, error: string, code
       [JSON.stringify(result), error.slice(0, 500), now, now, seq],
     ),
   );
+}
+
+/** An online attempt the face check refused: DISCARDED (a photo-less row for the record, never counted or listed), its
+ * photo files deleted now (on a failure pruneFrames removes them — it keeps only PENDING / REJECTED photos). */
+async function markDiscarded(seq: number, clientUuid: string, frames: QueuedFrame[], error: string, code: string | null): Promise<void> {
+  const result: PosAttendancePunchResult & { code?: string } = {
+    client_uuid: clientUuid,
+    status: 'REJECTED',
+    punch_id: null,
+    occurred_at: null,
+    flags: [],
+    employees_version: '',
+    error,
+    ...(code ? { code } : {}),
+  };
+  const now = new Date().toISOString();
+  await withDb((conn) =>
+    conn.execute(
+      `UPDATE attendance_punches SET status = 'DISCARDED', result_json = ?, last_error = ?, attempts = attempts + 1, last_attempt_at = ?, done_at = ?
+        WHERE seq = ? AND status = 'PENDING'`,
+      [JSON.stringify(result), error.slice(0, 500), now, now, seq],
+    ),
+  );
+  if (frames.length > 0 && PosFace) {
+    try {
+      await PosFace.deleteFrames(frames.map((f) => f.path));
+    } catch {
+      return; // pruneFrames will remove them
+    }
+  }
+  await withDb((conn) => conn.execute('UPDATE attendance_punches SET frames_deleted_at = ? WHERE seq = ?', [new Date().toISOString(), seq]));
 }
 
 async function applyResult(seq: number, frames: QueuedFrame[], res: PosAttendancePunchResult): Promise<void> {
@@ -462,8 +498,14 @@ async function pushInner(): Promise<boolean> {
           await markAttempt(seq, err.message);
           continue;
         }
+        if (discardsRefusal(num(row.online) === 1, err.status, err.code)) {
+          // An ONLINE attempt refused by the face check: nothing was stored on the server, the person retries with the
+          // same ticket — this attempt and its photos leave the tablet (user decision 2026-10-22).
+          await markDiscarded(seq, clientUuid, frames, err.message, err.code);
+          continue;
+        }
         if (err.status === 400 || err.status === 404 || err.status === 409 || err.status === 413 || err.status === 415 || err.status === 422) {
-          // 404 = person no longer active; 422 = refused (e.g. LIVENESS_FAILED): identical on every retry, so never PENDING.
+          // 404 = person no longer active; 400 e.g. TRANSPORT_NOT_ALLOWED; 422 = refused (e.g. an offline punch): identical on every retry, so never PENDING.
           await markRejected(seq, clientUuid, err.status === 422 ? err.message : `Refused by the server: ${err.message}`, err.code);
           continue;
         }
@@ -525,7 +567,7 @@ export async function pruneFrames(): Promise<void> {
   const stale = files.filter((f) => !keep.has(f.path) && now - f.modifiedAt > ORPHAN_FRAME_AGE_MS).map((f) => f.path);
   if (stale.length) await PosFace.deleteFrames(stale);
   await withDb((conn) =>
-    conn.execute(`UPDATE attendance_punches SET frames_deleted_at = ? WHERE status = 'RECORDED' AND frames_deleted_at IS NULL`, [new Date().toISOString()]),
+    conn.execute(`UPDATE attendance_punches SET frames_deleted_at = ? WHERE status IN ('RECORDED', 'DISCARDED') AND frames_deleted_at IS NULL`, [new Date().toISOString()]),
   );
 }
 

@@ -1,6 +1,7 @@
 // Attendance kiosk mode (CLAUDE.md "Attendance kiosk mode"; GamotERP docs/plans/hr-payroll-attendance.md "Kiosk punch
 // flow"): shown on the LOCKED till of a terminal HR made an attendance kiosk — nothing here can sell. Flow:
-//   person (grid of names + initials, search) → Time in / Time out (the suggested one big) → PIN (online: checked by
+//   person (grid of names + initials, search) → the kind (the suggested one big; Time in / out, Break out / in, and
+//   Transport out / in for multi-branch staff — app 1.3.0) → PIN (online: checked by
 //   the server, which answers a ticket + the liveness challenge; offline — no answer at all — skipped, the server flags
 //   PIN_NOT_CHECKED; 403 SUBSCRIPTION_LOCKED → no punch, paused + a forced check-in, never the offline path) →
 //   camera: the 2-step challenge with photos (LivenessCapture) → saved on the tablet + sent → "Time in recorded 8:02 AM"
@@ -13,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Modal, Pressable, ScrollView, Text, View, type LayoutChangeEvent } from 'react-native';
 
-import type { AttendanceLivenessStep, PosAttendanceEmployee } from '@pos-api/contract';
+import type { AttendanceLivenessStep, PosAttendanceEmployee, PosPunchKind } from '@pos-api/contract';
 
 import { attendanceApi } from '../api/client';
 import {
@@ -30,7 +31,7 @@ import {
   useAttendanceKiosk,
   type LocalPunch,
 } from '../attendance/attendanceKiosk';
-import { DEFAULT_CAPTURE, punchMessage } from '../attendance/punch';
+import { DEFAULT_CAPTURE, PUNCH_KIND_LABEL, punchKindsFor, punchMessage, suggestedKindOf, workStatusOf } from '../attendance/punch';
 import { LivenessCapture, type LivenessOutcome } from '../components/attendance/LivenessCapture';
 import { PIN_MIN, PinPad } from '../components/attendance/PinPad';
 import { errorMessage, formatDateTime } from '../components/shell/format';
@@ -40,7 +41,7 @@ import { makeStyles, useThemeColors } from '../ui/brandTheme';
 import { Banner, Button, TextField } from '../ui/components';
 import { radius, spacing } from '../ui/theme';
 
-type Kind = 'IN' | 'OUT';
+type Kind = PosPunchKind;
 type Employee = PosAttendanceEmployee;
 
 type Stage =
@@ -54,7 +55,7 @@ type Stage =
 const IDLE_RESET_MS = 45_000;
 const DONE_RESET_MS = 5_000;
 const UPLOAD_WAIT_MS = 12_000;
-const kindLabel = (k: Kind) => (k === 'IN' ? 'Time in' : 'Time out');
+const kindLabel = (k: Kind) => PUNCH_KIND_LABEL[k];
 /** An ApiError's HTTP status (0 = no connection), duck-typed; null for anything else. */
 const apiStatus = (e: unknown): number | null =>
   e && typeof e === 'object' && typeof (e as { status?: unknown }).status === 'number' ? (e as { status: number }).status : null;
@@ -327,7 +328,7 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
             {notReady(item) ? (
               <Text style={styles.personNotReady}>Ask HR: no {missingText(item.missing)}</Text>
             ) : (
-              <Text style={styles.personHint}>{item.suggested_kind === 'OUT' ? 'At work' : ' '}</Text>
+              <Text style={styles.personHint}>{workStatusOf(item) || ' '}</Text>
             )}
           </Pressable>
         )}
@@ -337,16 +338,19 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
   );
 }
 
-// ---- Time in / Time out ---------------------------------------------------------------------------------------------
+// ---- Time in / Time out / break / transport ------------------------------------------------------------------------
 
+// Like the web kiosk: the suggested kind big (back from the break after a break out, arrived after a transport out, else
+// the server's IN / OUT — punch.ts suggestedKindOf), every other kind this person may punch below it (break for
+// everyone, transport only when stationed at 2+ branches — punchKindsFor).
 function KindStep({ emp, online, onChoose, onBack }: { emp: Employee; online: boolean; onChoose: (k: Kind) => void; onBack: () => void }) {
   const styles = useStyles();
-  const suggested = emp.suggested_kind;
-  const other: Kind = suggested === 'IN' ? 'OUT' : 'IN';
+  const suggested = suggestedKindOf(emp);
+  const others = punchKindsFor(emp).filter((k) => k !== suggested);
   // Not set up (PIN and/or reference photo — readiness, known offline too from the cached list); online, a missing PIN.
   const unready = notReady(emp) || (online && !emp.pin_set);
   return (
-    <View style={styles.center}>
+    <ScrollView contentContainerStyle={styles.center}>
       <View style={styles.initialsBig}>
         <Text style={styles.initialsBigText}>{emp.initials}</Text>
       </View>
@@ -363,11 +367,20 @@ function KindStep({ emp, online, onChoose, onBack }: { emp: Employee; online: bo
           <Pressable accessibilityRole="button" onPress={() => onChoose(suggested)} style={({ pressed }) => [styles.kindBig, pressed && styles.kindBigPressed]}>
             <Text style={styles.kindBigText}>{kindLabel(suggested)}</Text>
           </Pressable>
-          <Button title={`${kindLabel(other)} instead`} variant="secondary" onPress={() => onChoose(other)} />
+          <View style={styles.kindRow}>
+            {others.map((k) => (
+              <Button key={k} title={kindLabel(k)} variant="secondary" onPress={() => onChoose(k)} />
+            ))}
+          </View>
+          <Text style={styles.muted}>
+            {emp.multi_branch === true
+              ? 'Break = your lunch break (not counted). Transport = travelling to your other branch (counted).'
+              : 'Break = your lunch break (not counted).'}
+          </Text>
         </>
       )}
       <Button title="Not me — back" variant="ghost" onPress={onBack} />
-    </View>
+    </ScrollView>
   );
 }
 
@@ -422,8 +435,9 @@ function PinStep({
         setError(`Not set up for attendance yet — ask HR to add your ${missingText(emp.missing)}.`);
         return;
       }
-      // Kiosk turned off / person no longer listed here: re-read the kiosk + list.
-      if (apiStatus(e) === 403 || apiStatus(e) === 404) void refreshKiosk({ force: true });
+      // Kiosk turned off / person no longer listed here / no longer multi-branch (400 TRANSPORT_NOT_ALLOWED): re-read the
+      // kiosk + list.
+      if (apiStatus(e) === 403 || apiStatus(e) === 404 || (e as { code?: unknown } | null)?.code === 'TRANSPORT_NOT_ALLOWED') void refreshKiosk({ force: true });
       setError(errorMessage(e, 'The PIN could not be checked.'));
     } finally {
       setBusy(false);
@@ -545,6 +559,7 @@ const useStyles = makeStyles((c, t) => ({
   personDisabled: { opacity: 0.5 },
   initialsBig: { width: 112, height: 112, borderRadius: 56, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center' },
   initialsBigText: { ...t.display, fontSize: 44, color: c.onPrimary },
+  kindRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: spacing.md, maxWidth: 720 },
   kindBig: { minWidth: 360, paddingVertical: spacing.xl, borderRadius: radius.lg, backgroundColor: c.primary, alignItems: 'center' },
   kindBigPressed: { backgroundColor: c.primaryDark },
   kindBigText: { ...t.display, color: c.onPrimary },

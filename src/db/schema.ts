@@ -21,6 +21,8 @@
 //   local_refunds       (v3) refunds made on this device, so the drawer's expected cash can subtract the cash paid back
 //   attendance_punches / attendance_cache  (v4) attendance kiosk mode: the signed punch queue (+ photo files on disk)
 //                       and the kiosk's cached config / employee list (src/attendance/, CLAUDE.md "Attendance kiosk mode")
+//   attendance_punches  (v5) rebuilt: every punch kind (break / transport) + status DISCARDED (an online attempt the
+//                       server's face check refused — photos deleted, user decision 2026-10-22)
 
 export interface Migration {
   version: number;
@@ -258,6 +260,48 @@ export const MIGRATIONS: Migration[] = [
          employees_json TEXT,
          checked_at     TEXT NOT NULL
        )`,
+    ],
+  },
+  {
+    // Break / transport punches on tablets (app 1.3.0; GamotERP lib/attendance/countable.ts PUNCH_KINDS) + DISCARDED.
+    // SQLite can't change a CHECK in place: rebuild the table, rows copied unchanged (seq kept, so the order and the
+    // AUTOINCREMENT high-water mark survive). Nothing references attendance_punches.
+    version: 5,
+    name: 'attendance_punch_kinds',
+    statements: [
+      `CREATE TABLE attendance_punches_v5 (
+         seq               INTEGER PRIMARY KEY AUTOINCREMENT,
+         client_uuid       TEXT NOT NULL UNIQUE,
+         device_id         INTEGER NOT NULL,
+         user_id           INTEGER NOT NULL,
+         display_name      TEXT NOT NULL,
+         kind              TEXT NOT NULL CHECK (kind IN ('IN', 'OUT', 'BREAK_OUT', 'BREAK_IN', 'TRANSPORT_OUT', 'TRANSPORT_IN')),
+         device_time       TEXT NOT NULL,
+         online            INTEGER NOT NULL CHECK (online IN (0, 1)),
+         payload_json      TEXT NOT NULL,
+         signature         TEXT NOT NULL,
+         frames_json       TEXT NOT NULL,
+         status            TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RECORDED', 'REJECTED', 'DISCARDED')),
+         attempts          INTEGER NOT NULL DEFAULT 0,
+         last_error        TEXT,
+         last_attempt_at   TEXT,
+         result_json       TEXT,
+         done_at           TEXT,
+         frames_deleted_at TEXT,
+         created_at        TEXT NOT NULL
+       )`,
+      `INSERT INTO attendance_punches_v5 (seq, client_uuid, device_id, user_id, display_name, kind, device_time, online, payload_json,
+         signature, frames_json, status, attempts, last_error, last_attempt_at, result_json, done_at, frames_deleted_at, created_at)
+       SELECT seq, client_uuid, device_id, user_id, display_name, kind, device_time, online, payload_json,
+         signature, frames_json, status, attempts, last_error, last_attempt_at, result_json, done_at, frames_deleted_at, created_at
+         FROM attendance_punches`,
+      'DROP TABLE attendance_punches',
+      'ALTER TABLE attendance_punches_v5 RENAME TO attendance_punches',
+      'CREATE INDEX attendance_punches_status_seq ON attendance_punches (status, seq)',
+      // 1.2.0 kept online face-check refusals as "Not accepted" with their photos: discard them like 1.3.0 does (the
+      // photo files go with the next pruneFrames, which keeps only PENDING / REJECTED photos).
+      `UPDATE attendance_punches SET status = 'DISCARDED'
+        WHERE status = 'REJECTED' AND online = 1 AND result_json LIKE '%"code":"LIVENESS_FAILED"%'`,
     ],
   },
 ];

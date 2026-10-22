@@ -11,11 +11,58 @@ import {
   type AttendanceFrameStep,
   type AttendanceLivenessStep,
   type PosAttendanceCapture,
+  type PosAttendanceEmployee,
   type PosAttendancePunchPayload,
+  type PosPunchKind,
 } from '@pos-api/contract';
 
 export const LIVENESS_STEPS: readonly AttendanceLivenessStep[] = ['BLINK', 'TURN_LEFT', 'TURN_RIGHT'];
 const FRAME_STEPS: readonly AttendanceFrameStep[] = ['START', ...LIVENESS_STEPS];
+
+// ---- punch kinds (GamotERP lib/attendance/countable.ts — THE rule; that file imports Prisma, so the few lines the
+// kiosk needs are mirrored here) ---------------------------------------------------------------------------------------
+//   IN / OUT = start / end of work; BREAK_OUT / BREAK_IN = the lunch break (everyone, not counted);
+//   TRANSPORT_OUT / TRANSPORT_IN = travelling between two of the employee's branches (multi-branch only, counted).
+export const PUNCH_KINDS: readonly PosPunchKind[] = ['IN', 'OUT', 'BREAK_OUT', 'BREAK_IN', 'TRANSPORT_OUT', 'TRANSPORT_IN'];
+export const isPunchKind = (k: unknown): k is PosPunchKind => typeof k === 'string' && (PUNCH_KINDS as readonly string[]).includes(k);
+export const isTransportKind = (k: PosPunchKind): boolean => k === 'TRANSPORT_OUT' || k === 'TRANSPORT_IN';
+/** After this punch the person is still on the clock (time in, back from the break, a transport punch). */
+export const onTheClockAfter = (k: PosPunchKind): boolean => k === 'IN' || k === 'BREAK_IN' || isTransportKind(k);
+
+export const PUNCH_KIND_LABEL: Record<PosPunchKind, string> = {
+  IN: 'Time in',
+  OUT: 'Time out',
+  BREAK_OUT: 'Break out',
+  BREAK_IN: 'Break in',
+  TRANSPORT_OUT: 'Transport out',
+  TRANSPORT_IN: 'Transport in',
+};
+
+type KindInfo = Pick<PosAttendanceEmployee, 'suggested_kind' | 'last_kind' | 'multi_branch'>;
+
+/** The kinds this person may punch: break for everyone, transport only when stationed at 2+ branches (web kiosk too). */
+export function punchKindsFor(e: KindInfo): PosPunchKind[] {
+  return e.multi_branch === true ? [...PUNCH_KINDS] : PUNCH_KINDS.filter((k) => !isTransportKind(k));
+}
+
+/** What the kiosk suggests: back from the break after a break out, arrived after a transport out, else the server's IN / OUT. */
+export function suggestedKindOf(e: KindInfo): PosPunchKind {
+  if (e.last_kind === 'BREAK_OUT') return 'BREAK_IN';
+  if (e.last_kind === 'TRANSPORT_OUT' && e.multi_branch === true) return 'TRANSPORT_IN';
+  return e.suggested_kind === 'OUT' ? 'OUT' : 'IN';
+}
+
+/** The cached entry after a punch on this tablet (offline too) — until the server's next list says otherwise. */
+export function afterPunch<E extends KindInfo>(e: E, kind: PosPunchKind): E {
+  return { ...e, last_kind: kind, suggested_kind: onTheClockAfter(kind) ? 'OUT' : 'IN' };
+}
+
+/** The grid's status line under a name ('' = nothing to say). */
+export function workStatusOf(e: KindInfo): string {
+  if (e.last_kind === 'BREAK_OUT') return 'On break';
+  if (e.last_kind === 'TRANSPORT_OUT' && e.multi_branch === true) return 'Travelling';
+  return e.suggested_kind === 'OUT' ? 'At work' : '';
+}
 
 /** Used when the server's capture rules aren't cached yet (the server's own defaults). */
 export const DEFAULT_CAPTURE: PosAttendanceCapture = { min_frames: 2, max_frames: 3, max_side_px: 640, jpeg_quality: 0.85, max_frame_bytes: 307200 };
@@ -66,7 +113,7 @@ const ISO_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{
 export function punchPayloadProblem(p: PosAttendancePunchPayload, capture: PosAttendanceCapture = DEFAULT_CAPTURE): string | null {
   if (!UUID_V4.test(p.client_uuid)) return 'client_uuid must be a v4 UUID';
   if (!Number.isInteger(p.user_id) || p.user_id < 1) return 'user_id must be a positive integer';
-  if (p.kind !== 'IN' && p.kind !== 'OUT') return 'kind must be IN or OUT';
+  if (!isPunchKind(p.kind)) return 'kind must be one of ' + PUNCH_KINDS.join(', ');
   if (!ISO_WITH_ZONE.test(p.device_time) || Number.isNaN(Date.parse(p.device_time))) return 'device_time must be ISO-8601 with a zone';
   if (p.ticket !== null && (typeof p.ticket !== 'string' || p.ticket.length < 10 || p.ticket.length > 2000)) return 'ticket is malformed';
   if ((p.ticket === null) !== (p.challenge.source === 'DEVICE')) return 'an online punch uses the server challenge; an offline one its own';
@@ -91,7 +138,7 @@ export function punchPayloadProblem(p: PosAttendancePunchPayload, capture: PosAt
 export interface BuildPunchInput {
   clientUuid: string;
   userId: number;
-  kind: 'IN' | 'OUT';
+  kind: PosPunchKind;
   /** Server-clock-corrected device time of the punch. */
   deviceTime: Date;
   ticket: { ticket: string; steps: AttendanceLivenessStep[] } | null;
@@ -202,17 +249,23 @@ export function punchUploadParts(
 }
 
 /** "Time in recorded 8:02 AM" (Manila time). */
-export function punchMessage(kind: 'IN' | 'OUT', at: Date, saved: 'RECORDED' | 'SAVED_ON_TABLET'): string {
+export function punchMessage(kind: PosPunchKind, at: Date, saved: 'RECORDED' | 'SAVED_ON_TABLET'): string {
   const time = new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', hour12: true })
     .format(at)
     .replace(/\s+/g, ' ')
     .toUpperCase();
-  const what = kind === 'IN' ? 'Time in' : 'Time out';
+  const what = PUNCH_KIND_LABEL[kind] ?? kind;
   return saved === 'RECORDED' ? `${what} recorded ${time}` : `${what} saved ${time}`;
 }
 
 /** The server refused an ONLINE punch because its face check wasn't passed (422 LIVENESS_FAILED — nothing stored, the ticket
- * is still usable). The code rides in the stored result JSON (no migration). */
+ * is still usable). Such an attempt is DISCARDED on the tablet (user decision 2026-10-22: photos deleted, no "Not
+ * accepted" entry); the code rides in the stored result JSON. */
 export function isLivenessRefusal(punch: { status: string; result?: unknown } | null | undefined): boolean {
-  return !!punch && punch.status === 'REJECTED' && (punch.result as { code?: unknown } | null | undefined)?.code === 'LIVENESS_FAILED';
+  return !!punch && punch.status === 'DISCARDED' && (punch.result as { code?: unknown } | null | undefined)?.code === 'LIVENESS_FAILED';
+}
+
+/** A 422 LIVENESS_FAILED for an ONLINE punch (it carried a ticket) is discarded; every other refusal is kept. */
+export function discardsRefusal(online: boolean, status: number, code: string | null | undefined): boolean {
+  return online && status === 422 && code === 'LIVENESS_FAILED';
 }
