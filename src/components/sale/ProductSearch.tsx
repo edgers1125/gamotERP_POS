@@ -11,7 +11,7 @@ import { Button } from '../../ui/components';
 import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, shadow, spacing } from '../../ui/theme';
 import { findByBarcode, findBySkuCode, groupByModel, hasBarcode, searchCatalogStrict, type CatalogGroup } from '../../sale/catalogSearch';
-import { useCashier } from '../../auth/cashierSession';
+import { PICK_OVERRIDE_CODE, useCashier } from '../../auth/cashierSession';
 import { priceAt, shownPrice, useCart } from '../../sale/cart';
 import { formatPeso } from '../../sale/money';
 import { BarcodeScannerPanel, type ScanOutcome } from './BarcodeScannerPanel';
@@ -57,7 +57,7 @@ export function ProductSearch({
   const styles = useStyles();
   const theme = useThemeColors();
   const pricesIncludeVat = useCart((s) => s.pricesIncludeVat);
-  const canOverride = useCashier((s) => s.cashier?.permissions.includes('itemtracker.pickoverride') ?? false);
+  const canOverride = useCashier((s) => s.cashier?.permissions.includes(PICK_OVERRIDE_CODE) ?? false);
   const [overrideOn, setOverrideOn] = useState(false);
   const override = canOverride && overrideOn;
   // The sale ended (cart went back to empty): override is per sale, so it switches off (render-time state adjustment).

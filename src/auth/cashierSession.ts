@@ -22,6 +22,8 @@ export const PIN_MIN_LENGTH = 4;
 export const PIN_MAX_LENGTH = 6;
 export const PIN_MAX_FAILURES = 5;
 export const PIN_LOCKOUT_MS = 5 * 60 * 1000;
+/** Strict-pick override permission (GamotERP lib/strict-pick.ts PICK_OVERRIDE_CODE); the Sell screen checks it. */
+export const PICK_OVERRIDE_CODE = 'itemtracker.pickoverride';
 // Two SHA-256 compressions per iteration in JS; ~1–2 s on a low-end Hermes device. Stored in each verifier, so it can
 // be raised later without invalidating existing PINs.
 const PIN_ITERATIONS = 20000;
@@ -173,11 +175,17 @@ export const cashierSession: CashierSessionStore & CashierSessionExtras = {
   async loginOnline(email, password, mfaCode) {
     const res = await api.cashierSession(email.trim(), password, mfaCode?.trim() || undefined);
     if (res.mfa_required) return 'MFA_REQUIRED';
+    // Strict-pick override: the server says whether this cashier may override (itemtracker.pickoverride OR company
+    // owner — contract `may_override_pick`, 2026-10-22). Folded into the permission list as the code, so the Sell
+    // screen's one check and the offline PIN snapshot carry it. Absent (older server) → the codes as sent.
+    const mayOverridePick = (res as { may_override_pick?: boolean }).may_override_pick === true;
+    const permissions =
+      mayOverridePick && !res.permissions.includes(PICK_OVERRIDE_CODE) ? [...res.permissions, PICK_OVERRIDE_CODE] : res.permissions;
     const cashier: CashierState = {
       userId: res.user.id,
       name: res.user.name,
       email: res.user.email,
-      permissions: res.permissions,
+      permissions,
       mode: 'ONLINE',
       token: res.cashier_token,
     };
