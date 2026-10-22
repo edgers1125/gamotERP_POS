@@ -8,6 +8,11 @@ function norm(s: string): string {
   return s.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
 }
 
+/** Strict picking: an item with a barcode in the synced catalog (`barcodes` = its active barcodes) can't be picked by name. */
+export function hasBarcode(item: PosCatalogItem): boolean {
+  return item.barcodes.length > 0;
+}
+
 /** Every word of the query must appear in the name, SKU code or a barcode. */
 export function filterCatalog(items: PosCatalogItem[], query: string, limit: number): PosCatalogItem[] {
   const words = norm(query).split(/\s+/).filter(Boolean);
@@ -35,6 +40,27 @@ export async function searchCatalog(query: string, catalog: PosCatalog | null, l
   return filterCatalog(catalog?.items ?? [], query, limit);
 }
 
+/**
+ * Name search under the strict-pick rule: items WITH a barcode are left out (scan them or type the exact SKU code)
+ * unless `override` (cashier holds itemtracker.pickoverride and turned override on for this sale).
+ */
+export async function searchCatalogStrict(query: string, catalog: PosCatalog | null, override: boolean, limit = 60): Promise<PosCatalogItem[]> {
+  if (override) return searchCatalog(query, catalog, limit);
+  if (query.trim() === '') return (catalog?.items ?? []).filter((i) => !hasBarcode(i)).slice(0, limit);
+  // Over-fetch: the barcoded matches are dropped afterwards.
+  const rows = await searchCatalog(query, catalog, limit * 4);
+  return rows.filter((i) => !hasBarcode(i)).slice(0, limit);
+}
+
+/** Exact SKU code (case-insensitive, no prefix). 'many' when two items share the code (scan the barcode instead). */
+export function findBySkuCode(code: string, catalog: PosCatalog | null): PosCatalogItem | 'many' | null {
+  const c = code.trim().toLowerCase();
+  if (c === '') return null;
+  const hits = (catalog?.items ?? []).filter((i) => i.sku_code.toLowerCase() === c);
+  return hits.length === 0 ? null : hits.length === 1 ? hits[0]! : 'many';
+}
+
+/** Exact barcode only (a scan). The SKU code is looked up separately with findBySkuCode. */
 export async function findByBarcode(barcode: string, catalog: PosCatalog | null): Promise<PosCatalogItem | null> {
   const code = barcode.trim();
   if (code === '') return null;
@@ -45,7 +71,7 @@ export async function findByBarcode(barcode: string, catalog: PosCatalog | null)
     // fall through
   }
   const items = catalog?.items ?? [];
-  return items.find((i) => i.barcodes.includes(code)) ?? items.find((i) => i.sku_code.toLowerCase() === code.toLowerCase()) ?? null;
+  return items.find((i) => i.barcodes.includes(code)) ?? null;
 }
 
 // ---- grouping by product model (the Sell screen shows one tile per model) ---------------------------------------

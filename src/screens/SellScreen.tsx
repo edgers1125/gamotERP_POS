@@ -280,6 +280,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
             catalog={data.catalog}
             channelId={cart.channelId}
             channelName={channelName}
+            lineCount={cart.lines.length}
             onAdd={(item) => cart.addItem(item, data.catalog?.version ?? null)}
             disabled={!!blocked || cart.channelId === null}
           />
