@@ -57,7 +57,7 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   (`workStatusOf`). Server 400 `TRANSPORT_NOT_ALLOWED` at the PIN step → its message + list re-read; at upload → kept as
   REJECTED. `attendance_punches.kind` CHECK widened by local migration v5. **Release: backend first** — against an older server (no
   `last_kind` / `multi_branch`, IN/OUT-only schema) the break buttons still show but the PIN step refuses a break punch
-  (400, shown); IN/OUT keep working. Older apps (≤ 1.2.0) against the new server: unchanged (IN/OUT only).
+  (400, shown) and an OFFLINE break punch comes back REJECTED at upload (400, kept as "Not accepted"); IN/OUT keep working. Older apps (≤ 1.2.0) against the new server: unchanged (IN/OUT only).
 - **Flow** (`src/screens/AttendanceKioskScreen.tsx`): name grid (initials, search) → the kind (above) → PIN pad **online only** (`POST
   /pos/attendance/pin` → ticket + the server's challenge; not set up → "ask HR", no punch; a network failure here →
   continues offline; 403 `SUBSCRIPTION_LOCKED` → paused, see Lock) → camera (`LivenessCapture`) → saved + sent → "Time in recorded 8:02 AM" → list after 5 s. Idle

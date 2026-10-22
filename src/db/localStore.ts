@@ -56,7 +56,19 @@ import { money } from '../sale/money';
 import { initDatabase, json, jsonOrNull, num, rows, str, strOrNull, withDb, type BatchCommand, type Conn, type Row } from './database';
 import { emitLocalStoreEvent } from './events';
 import { Mutex } from './mutex';
-import { APP_VERSION, AUTO_TIME_OFF_MESSAGE, blockReason, compareVersions, offlineWarning, platformInactive, UNKNOWN_MIN_VERSION } from './policy';
+import {
+  APP_VERSION,
+  AUTO_TIME_OFF_MESSAGE,
+  blockReason,
+  compareVersions,
+  encodeInactive,
+  loadStoredInactive,
+  offlineWarning,
+  platformInactive,
+  setPlatformInactive,
+  UNKNOWN_MIN_VERSION,
+  type InactiveInfo,
+} from './policy';
 
 const counterLock = new Mutex();
 
@@ -76,6 +88,9 @@ const META_LICENSE = 'license';
 const META_LICENSE_FLOOR = 'license_floor_ms';
 // Device time (ISO) of the last successful server contact — the "not checked in for N h" banner.
 const META_LAST_CHECK_IN = 'last_check_in_at';
+// Paused by the administrator (403 COMPANY_INACTIVE / TERMINAL_INACTIVE / MODULE_NOT_INCLUDED — policy.ts): JSON
+// InactiveInfo; present = paused, survives a restart until a check-in succeeds.
+const META_INACTIVE = 'inactive';
 
 type SyncState = LocalSale['sync_status'];
 
@@ -402,7 +417,9 @@ export interface LocalStoreExtras {
   /** Flags that block selling, persisted across restarts. */
   getFlags(): Promise<{ revoked: boolean; updateRequired: string | null }>;
   setRevoked(revoked: boolean): Promise<void>;
-  /** `min` = the server's min_app_version (null when unknown); null clears. */
+  /** Paused by the administrator (null = not): saved to the meta table, then the in-memory copy policy.ts reads. */
+  setInactive(info: InactiveInfo | null): Promise<void>;
+  /** `min` =the server's min_app_version (null when unknown); null clears. */
   setUpdateRequired(min: string | null | undefined): Promise<void>;
   /** Why selling is blocked (revoked / update / subscription locked / license / offline limits), computed from the
    * DB — or null. */
@@ -468,6 +485,8 @@ function bootstrapVersionOf(b: PosBootstrap): string | null {
 export const localStore: LocalStore & LocalStoreExtras = {
   async init() {
     await initDatabase();
+    // A till paused before a restart stays paused (offline too) until a check-in succeeds — policy.ts platformInactive.
+    loadStoredInactive(await withDb((conn) => readMeta(conn, META_INACTIVE)));
   },
 
   // ---------------------------------------------------------------- enrollment / bootstrap / catalog caches
@@ -520,10 +539,12 @@ export const localStore: LocalStore & LocalStoreExtras = {
             META_APPROVERS_VERSION,
             META_BOOTSTRAP_VERSION,
           ]);
+          await tx.execute('DELETE FROM meta WHERE key = ?', [META_INACTIVE]);
           await resetLicenseForEnrollment(tx);
         }),
       ),
     );
+    setPlatformInactive(null); // a new enrollment starts unpaused; its first check-in says otherwise
     catalogMemo = null;
     emitLocalStoreEvent('changed');
   },
@@ -1166,6 +1187,20 @@ export const localStore: LocalStore & LocalStoreExtras = {
         ? conn.execute('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [META_REVOKED, '1'])
         : conn.execute('DELETE FROM meta WHERE key = ?', [META_REVOKED]),
     );
+    emitLocalStoreEvent('changed');
+  },
+
+  async setInactive(info) {
+    // Memory first when pausing (selling stops even if the write fails), last when un-pausing (a failed delete leaves
+    // the row, which a restart reads as paused — the next check-in clears it again).
+    const text = encodeInactive(info);
+    if (info) setPlatformInactive(info);
+    await withDb((conn) =>
+      text === null
+        ? conn.execute('DELETE FROM meta WHERE key = ?', [META_INACTIVE])
+        : conn.execute('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [META_INACTIVE, text]),
+    );
+    if (!info) setPlatformInactive(null);
     emitLocalStoreEvent('changed');
   },
 

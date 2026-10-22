@@ -166,11 +166,21 @@ export function AttendanceKioskScreen() {
       const after = (await uploadAndWait(saved.clientUuid, UPLOAD_WAIT_MS).catch(() => null)) ?? (await getPunch(saved.clientUuid).catch(() => null)) ?? saved;
       if (after.status === 'RECORDED' && after.result?.occurred_at) {
         setStage({ k: 'done', emp, kind, headline: punchMessage(kind, new Date(after.result.occurred_at), 'RECORDED'), detail: emp.display_name, tone: 'success' });
-      } else if (after.status === 'REJECTED' && ticket && isLivenessRefusal(after)) {
-        // Server 2.28+: an online punch needs a PASSED face check. Nothing was stored and the ticket is still unused, so
-        // go back to the camera with the SAME ticket + steps for a fresh attempt.
+      } else if (ticket && isLivenessRefusal(after)) {
+        // Server 2.28+: an online punch needs a PASSED face check. Nothing was stored there and the ticket is still
+        // unused (this attempt was DISCARDED here, photos deleted), so go back to the camera with the SAME ticket + steps.
         touch();
         setStage({ k: 'camera', emp, kind, ticket, steps: ticket.steps, note: after.result?.error ?? after.lastError ?? 'The face check was not passed — please try again. Your time was not recorded.' });
+      } else if (after.status === 'DISCARDED') {
+        // Never a success message: this attempt is not a punch (nothing on the server, nothing waiting here).
+        setStage({
+          k: 'done',
+          emp,
+          kind,
+          headline: 'Your time was not recorded',
+          detail: `${emp.display_name} — ${after.result?.error ?? after.lastError ?? 'the face check was not passed'}. Please punch again.`,
+          tone: 'warning',
+        });
       } else if (after.status === 'REJECTED') {
         setStage({
           k: 'done',

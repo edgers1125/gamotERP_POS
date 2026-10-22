@@ -514,6 +514,16 @@ async function pushInner(): Promise<boolean> {
         throw e;
       }
       contacted = true;
+      // A 422 comes back as a body (api/client.ts acceptStatuses): a PosAttendancePunchResult REJECTED, or the plain
+      // AttendanceError body { error, code } — LIVENESS_FAILED arrives that way (no `status`).
+      const refusal = res as unknown as { status?: unknown; error?: unknown; code?: unknown };
+      const refusalCode = typeof refusal.code === 'string' ? refusal.code : null;
+      if (refusal.status === undefined && discardsRefusal(num(row.online) === 1, 422, refusalCode)) {
+        // An ONLINE attempt refused by the face check: nothing was stored on the server, the person retries with the
+        // same ticket — this attempt and its photos leave the tablet (user decision 2026-10-22).
+        await markDiscarded(seq, clientUuid, frames, typeof refusal.error === 'string' ? refusal.error : 'The face check was not passed.', refusalCode);
+        continue;
+      }
       await applyResult(seq, frames, res);
       const cachedVersion = useAttendanceKiosk.getState().kiosk?.employees_version;
       if (res.employees_version && cachedVersion && res.employees_version !== cachedVersion) employeesChanged = true;

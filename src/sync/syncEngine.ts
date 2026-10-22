@@ -155,15 +155,16 @@ function messageOf(e: unknown): string {
   return String(e);
 }
 
-function markInactive(code: string, message: string): void {
-  setPlatformInactive({ code, message });
+/** Paused by the administrator — saved (localStore.setInactive), so a restart stays paused until a check-in succeeds. */
+async function markInactive(code: string, message: string): Promise<void> {
   realtime.setWanted(false);
   setStatus({ online: true, inactive: { code, message }, lastError: message || code });
+  await localStore.setInactive({ code, message }).catch(() => setPlatformInactive({ code, message }));
 }
-/** A device call worked: the till is no longer paused. */
-function clearInactive(): void {
+/** A device call worked: the till is no longer paused (memory + the saved row). */
+async function clearInactive(): Promise<void> {
   if (platformInactive() === null) return;
-  setPlatformInactive(null);
+  await localStore.setInactive(null).catch(() => setPlatformInactive(null));
   setStatus({ inactive: null });
 }
 
@@ -180,7 +181,7 @@ async function noteError(e: unknown): Promise<void> {
     // Company / terminal deactivated (or no Branch Sales module): paused, NOT revoked. Unsent sales wait in the
     // outbox; the normal backoff retry (heartbeat / upload) notices reactivation. No real-time meanwhile.
     reachable = true;
-    markInactive(err.code, err.message);
+    await markInactive(err.code, err.message);
     return;
   }
   if (err?.status === 426) {
@@ -634,7 +635,7 @@ async function runCycle(): Promise<boolean> {
     } else if (approversTarget !== null && Date.now() - approversTriedAt >= APPROVERS_RETRY_MS) {
       await refreshApprovers(false); // a notice arrived while no cashier was signed in online
     }
-    if (contacted) clearInactive();
+    if (contacted) await clearInactive();
     if (contacted) setStatus({ lastError: null, lastSyncAt: new Date().toISOString() });
     // A live real-time socket is server contact too (its hello/state replace the heartbeat).
     if (contacted || realtime.isLive()) await noteCheckIn();

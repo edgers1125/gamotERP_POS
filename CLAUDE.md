@@ -64,9 +64,9 @@ stay import-free (no Prisma/Node) — if a change there needs an import, it brea
 | `src/api/client.ts` | `api` — every contract route; adds `Authorization: DPoP <device token>` + `DPoP` proof, and `X-Cashier-Token` on cashier routes; `ApiError` / `AppUpdateRequiredError`; `appVersion()` (use this one) |
 | `src/config/serverConfig.ts` | server base URL (secure store) |
 | `src/config/runtime.ts` | `isExpoGo` (the ONLY switch for Expo Go preview mode), `appVersionName()` — use it, not `Application.nativeApplicationVersion` |
-| `src/db/` | `localStore` — SQLCipher DB (op-sqlite; key in secure store): enrollment, device-owned counters, bootstrap, catalog (+ search/barcode), approvers, sales, **outbox**, PIN verifiers; `policy.ts` = selling-block rules |
+| `src/db/` | `localStore` — SQLCipher DB (op-sqlite; key in secure store): enrollment, device-owned counters, bootstrap, catalog (+ search/barcode), approvers, sales, **outbox**, PIN verifiers; `policy.ts` = selling-block rules; `inactive.ts` = the paused-by-administrator state (pure; self-test `scripts/paused-selftest.ts`) |
 | `src/drawer/` | cash drawer: `cashDrawer.ts` (types, the ONE expected-cash calculation `drawerTally`, the selling rule `drawerSellProblem`), `useCashDrawer.ts` (open session as UI state, `useDrawerGate`) — see "Cash drawer" |
-| `src/sync/syncEngine.ts` | `syncEngine` + `useSyncStatus` — sync loop, heartbeat, catalog refresh, offline limits, revoked / paused-inactive (403 `COMPANY_INACTIVE` / `TERMINAL_INACTIVE` / `MODULE_NOT_INCLUDED`, cleared by the next good call) / update-required; errors back off 5 s → 5 min (incl. 503 `SYNC_BUSY`); a 413 halves the batch (down to one op) until the outbox drains |
+| `src/sync/syncEngine.ts` | `syncEngine` + `useSyncStatus` — sync loop, heartbeat, catalog refresh, offline limits, revoked / paused-inactive (403 `COMPANY_INACTIVE` / `TERMINAL_INACTIVE` / `MODULE_NOT_INCLUDED`, SAVED (meta `inactive`, `src/db/inactive.ts`) so a restart — offline too — stays paused; cleared only by the next good call or a re-enroll) / update-required; errors back off 5 s → 5 min (incl. 503 `SYNC_BUSY`); a 413 halves the batch (down to one op) until the outbox drains |
 | `src/license/` | license lease (Ed25519, pinned keys) — `lease.ts` (pure verify/evaluate), `licenseKeys.ts` (pinned keys), `licenseEval.ts` ("now" + floor), `license.ts` (stores check-in results); see "License lease" below. Self-test: `scripts/license-selftest.ts` |
 | `src/sync/realtime.ts` | real-time WebSocket (`/pos/realtime`, notices only) — owned by `syncEngine`; see "Real-time channel" below |
 | `src/auth/` | `cashierSession` — online sign-in (+MFA) and offline PIN unlock (PBKDF2 verifier, lockout); `tillLock` + `tillLockPolicy` — idle / background auto-lock and the sticky Sold By reset (see "Cashier vs Sold By + till auto-lock"). Self-test: `scripts/till-lock-selftest.ts` |
@@ -90,7 +90,7 @@ stay import-free (no Prisma/Node) — if a change there needs an import, it brea
    and void co-signs use the approver's 6-digit code; offline, the server verifies it at sync against the sale/void time.
 6. **Offline limits** (terminal `offline_max_hours` / `offline_max_sales`) block selling when reached, unless the
    terminal has `offline_unlimited` (then only the not-checked-in warning after `offline_warn_hours`). Revoked,
-   paused by the administrator (403 company/terminal inactive), update-required, subscription LOCKED and an expired license lease block it too (`src/db/policy.ts`, in that order).
+   paused by the administrator (403 company/terminal inactive — kept across restarts until a check-in succeeds), update-required, subscription LOCKED and an expired license lease block it too (`src/db/policy.ts`, in that order).
    Only selling is ever blocked — check-in, voids, X/Z readings, reprints, export and settings never are.
 7. **Money is a string** ("123.45") everywhere in payloads; totals come from the shared pricing code.
 8. **Never lock the screen orientation** (app.json `"orientation": "default"`). Locked to landscape, Android's camera

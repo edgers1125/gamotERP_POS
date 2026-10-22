@@ -10,6 +10,8 @@ import { BUSINESS_TIME_ZONE } from '@shared/business-day';
 import { appVersionName } from '../config/runtime';
 import type { LicenseCode } from '../license/lease';
 
+import { INACTIVE_MESSAGE } from './inactive';
+
 /** This build's version (app.json "version" → versionName), as sent in heartbeats. */
 export const APP_VERSION: string = appVersionName();
 
@@ -46,24 +48,17 @@ export const REVOKED_MESSAGE =
   'This device has been revoked. Selling is disabled — ask your administrator to enroll a new device.';
 
 // ---- paused by the administrator (403 COMPANY_INACTIVE / TERMINAL_INACTIVE / MODULE_NOT_INCLUDED) ----------------------
-export const INACTIVE_MESSAGE =
-  'This till is paused by the administrator (company/terminal deactivated). Unsent sales stay on this tablet.';
-
-export interface InactiveInfo {
-  code: string;
-  /** The server's own message (shown on the Check-in screen). */
-  message: string;
-}
-export const INACTIVE_CODES: readonly string[] = ['COMPANY_INACTIVE', 'TERMINAL_INACTIVE', 'MODULE_NOT_INCLUDED'];
-// In memory only: set by the sync engine on those 403s, cleared on the next successful device call. The device is NOT
-// revoked and nothing is deleted; after an app restart the first check-in sets it again.
-let inactiveInfo: InactiveInfo | null = null;
-export function setPlatformInactive(info: InactiveInfo | null): void {
-  inactiveInfo = info;
-}
-export function platformInactive(): InactiveInfo | null {
-  return inactiveInfo;
-}
+// Pure (no Expo imports) so scripts/paused-selftest.ts can load it; re-exported here for the existing callers.
+export {
+  decodeInactive,
+  encodeInactive,
+  INACTIVE_CODES,
+  INACTIVE_MESSAGE,
+  loadStoredInactive,
+  platformInactive,
+  setPlatformInactive,
+  type InactiveInfo,
+} from './inactive';
 
 // ---- device clock (docs/plans/pos-android-app.md "Device clock trust") ------------------------------------------------
 /** The text the Sell screen matches to show the "Open Date & time settings" button — keep it a single constant. */
