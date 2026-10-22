@@ -66,7 +66,7 @@ stay import-free (no Prisma/Node) — if a change there needs an import, it brea
 | `src/config/runtime.ts` | `isExpoGo` (the ONLY switch for Expo Go preview mode), `appVersionName()` — use it, not `Application.nativeApplicationVersion` |
 | `src/db/` | `localStore` — SQLCipher DB (op-sqlite; key in secure store): enrollment, device-owned counters, bootstrap, catalog (+ search/barcode), approvers, sales, **outbox**, PIN verifiers; `policy.ts` = selling-block rules |
 | `src/drawer/` | cash drawer: `cashDrawer.ts` (types, the ONE expected-cash calculation `drawerTally`, the selling rule `drawerSellProblem`), `useCashDrawer.ts` (open session as UI state, `useDrawerGate`) — see "Cash drawer" |
-| `src/sync/syncEngine.ts` | `syncEngine` + `useSyncStatus` — sync loop, heartbeat, catalog refresh, offline limits, revoked / update-required; errors back off 5 s → 5 min (incl. 503 `SYNC_BUSY`); a 413 halves the batch (down to one op) until the outbox drains |
+| `src/sync/syncEngine.ts` | `syncEngine` + `useSyncStatus` — sync loop, heartbeat, catalog refresh, offline limits, revoked / paused-inactive (403 `COMPANY_INACTIVE` / `TERMINAL_INACTIVE` / `MODULE_NOT_INCLUDED`, cleared by the next good call) / update-required; errors back off 5 s → 5 min (incl. 503 `SYNC_BUSY`); a 413 halves the batch (down to one op) until the outbox drains |
 | `src/license/` | license lease (Ed25519, pinned keys) — `lease.ts` (pure verify/evaluate), `licenseKeys.ts` (pinned keys), `licenseEval.ts` ("now" + floor), `license.ts` (stores check-in results); see "License lease" below. Self-test: `scripts/license-selftest.ts` |
 | `src/sync/realtime.ts` | real-time WebSocket (`/pos/realtime`, notices only) — owned by `syncEngine`; see "Real-time channel" below |
 | `src/auth/` | `cashierSession` — online sign-in (+MFA) and offline PIN unlock (PBKDF2 verifier, lockout); `tillLock` + `tillLockPolicy` — idle / background auto-lock and the sticky Sold By reset (see "Cashier vs Sold By + till auto-lock"). Self-test: `scripts/till-lock-selftest.ts` |
@@ -90,7 +90,7 @@ stay import-free (no Prisma/Node) — if a change there needs an import, it brea
    and void co-signs use the approver's 6-digit code; offline, the server verifies it at sync against the sale/void time.
 6. **Offline limits** (terminal `offline_max_hours` / `offline_max_sales`) block selling when reached, unless the
    terminal has `offline_unlimited` (then only the not-checked-in warning after `offline_warn_hours`). Revoked,
-   update-required, subscription LOCKED and an expired license lease block it too (`src/db/policy.ts`, in that order).
+   paused by the administrator (403 company/terminal inactive), update-required, subscription LOCKED and an expired license lease block it too (`src/db/policy.ts`, in that order).
    Only selling is ever blocked — check-in, voids, X/Z readings, reprints, export and settings never are.
 7. **Money is a string** ("123.45") everywhere in payloads; totals come from the shared pricing code.
 8. **Never lock the screen orientation** (app.json `"orientation": "default"`). Locked to landscape, Android's camera
@@ -98,9 +98,10 @@ stay import-free (no Prisma/Node) — if a change there needs an import, it brea
    emulator, even with the opt-outs in `plugins/withNoCameraCompatRotation.js`). Tablets are landscape-first anyway;
    lock rotation device-wide (kiosk policy / auto-rotate off), and keep layouts flex-based so portrait still works.
 
-9. **Device clock** (2026-10-12; server side: ERP plan "Device clock trust"). Selling AND voiding are refused while Android
+9. **Device clock** (2026-10-12; server side: ERP plan "Device clock trust"). Selling is refused while Android
    "Automatic date & time" is off (`policy.ts` `AUTO_TIME_OFF_MESSAGE` via `blockReason` `autoTimeOn`; `localStore.recordSale`
-   / `recordVoid` re-read it every time; the Sell screen banner has a "Date & time settings" button; the status is
+   re-reads it every time; voids are NOT refused — user decision 2026-10-22, rule 6 — their clock report says
+   `auto_time: false` and the server times their stock effect at upload; the Sell screen banner has a "Date & time settings" button; the status is
    re-read when the app returns to the foreground). A setting that can't be read counts as OFF. Every sale/void is
    stamped when MADE: `sold_at` / `voided_at` = the corrected time and `clock: { auto_time, server_offset_ms,
    offset_measured_at }` (`stampClock()`), inside the signed payload — so a late sync carries the values from creation.

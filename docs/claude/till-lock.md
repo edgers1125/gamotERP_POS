@@ -28,7 +28,7 @@ PIN back.
 - **Receipt:** `ReceiptData.staff_line` "Cashier: X · Sold by: Y" (shared `@shared/receipt-layout` `staffLine`), from
   names snapshotted at the sale (`ReceiptSnapshot.cashierName / soldByName`, `checkout.ts`), else today's Sales Staff
   list; the screen (`ReceiptView`) and the ESC/POS text print it under Trans No. / Date / Ref.
-- **Auto-lock:** bootstrap `till.idle_lock_minutes` (branch setting on the web, Branches › Manage POS; 0 = off; absent =
+- **Auto-lock:** bootstrap `till.idle_lock_minutes` (per COMPANY since 2026-10-08: admin portal › Companies › "Till auto-lock" — was a branch setting under Branches › Manage POS; 0 = off; absent =
   20 — `idleLockMinutesOf`). Locks via `cashierSession.lock()` (exactly the Lock button: the same cashier's PIN resumes an
   online session) after that many minutes without a touch, and when the app has been in the background ≥ 10 s
   (`BACKGROUND_GRACE_MS` — screen off / home; a short system dialog such as a permission prompt doesn't lock; checked

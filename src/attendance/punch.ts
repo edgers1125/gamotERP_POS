@@ -210,3 +210,9 @@ export function punchMessage(kind: 'IN' | 'OUT', at: Date, saved: 'RECORDED' | '
   const what = kind === 'IN' ? 'Time in' : 'Time out';
   return saved === 'RECORDED' ? `${what} recorded ${time}` : `${what} saved ${time}`;
 }
+
+/** The server refused an ONLINE punch because its face check wasn't passed (422 LIVENESS_FAILED — nothing stored, the ticket
+ * is still usable). The code rides in the stored result JSON (no migration). */
+export function isLivenessRefusal(punch: { status: string; result?: unknown } | null | undefined): boolean {
+  return !!punch && punch.status === 'REJECTED' && (punch.result as { code?: unknown } | null | undefined)?.code === 'LIVENESS_FAILED';
+}

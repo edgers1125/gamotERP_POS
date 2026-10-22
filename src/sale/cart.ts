@@ -89,7 +89,8 @@ export interface CartState {
   stock: Record<number, number>;
   /** The terminal's store promos (cached bootstrap `promos`; [] from an older server). Kept across sales. */
   promos: PosPromo[];
-  /** VAT-inclusive pricing (cached bootstrap receipt.vat_registered, `pricesIncludeVatOf`). Kept across sales. */
+  /** VAT-inclusive pricing (cached bootstrap receipt.vat_registered, `pricesIncludeVatOf`). Kept across sales; the Sell
+   * screen changes it only while the cart is empty (frozen for the sale in progress). */
   pricesIncludeVat: boolean;
 
   setChannel(channelId: number, catalog: PosCatalog | null, channelName?: string): void;

@@ -48,7 +48,16 @@ import { onLocalStoreEvent } from '../db/events';
 import { displayService } from '../display/displayService';
 import { ensureReceiptLogo } from '../sale/receiptAssets';
 import { localStore } from '../db/localStore';
-import { APP_VERSION, compareVersions, licenseWarningMessage, REVOKED_MESSAGE, UNKNOWN_MIN_VERSION } from '../db/policy';
+import {
+  APP_VERSION,
+  compareVersions,
+  INACTIVE_CODES,
+  licenseWarningMessage,
+  platformInactive,
+  REVOKED_MESSAGE,
+  setPlatformInactive,
+  UNKNOWN_MIN_VERSION,
+} from '../db/policy';
 import { license } from '../license/license';
 import { realtime, type RealtimeConnection } from './realtime';
 
@@ -81,6 +90,7 @@ const INITIAL_STATUS: SyncStatus = {
   rejected: 0,
   revoked: false,
   updateRequired: null,
+  inactive: null,
   blockedReason: null,
   subscriptionLocked: false,
   licenseWarning: null,
@@ -145,6 +155,18 @@ function messageOf(e: unknown): string {
   return String(e);
 }
 
+function markInactive(code: string, message: string): void {
+  setPlatformInactive({ code, message });
+  realtime.setWanted(false);
+  setStatus({ online: true, inactive: { code, message }, lastError: message || code });
+}
+/** A device call worked: the till is no longer paused. */
+function clearInactive(): void {
+  if (platformInactive() === null) return;
+  setPlatformInactive(null);
+  setStatus({ inactive: null });
+}
+
 /** Records what an error means for the device (revoked / update / unreachable) and the status line. */
 async function noteError(e: unknown): Promise<void> {
   const err = asApiError(e);
@@ -152,6 +174,13 @@ async function noteError(e: unknown): Promise<void> {
     reachable = true;
     await localStore.setRevoked(true);
     setStatus({ revoked: true, online: true, lastError: REVOKED_MESSAGE });
+    return;
+  }
+  if (err?.status === 403 && err.code && INACTIVE_CODES.includes(err.code)) {
+    // Company / terminal deactivated (or no Branch Sales module): paused, NOT revoked. Unsent sales wait in the
+    // outbox; the normal backoff retry (heartbeat / upload) notices reactivation. No real-time meanwhile.
+    reachable = true;
+    markInactive(err.code, err.message);
     return;
   }
   if (err?.status === 426) {
@@ -195,6 +224,7 @@ async function refreshStatus(): Promise<void> {
       rejected,
       revoked: flags.revoked,
       updateRequired: flags.updateRequired,
+      inactive: platformInactive(),
       blockedReason,
       subscriptionLocked: lic.evaluation.code === 'LOCKED',
       licenseWarning: lic.evaluation.code === 'VALID' ? licenseWarningMessage(lic.evaluation.warn, lic.evaluation.validUntilMs) : null,
@@ -529,6 +559,12 @@ realtime.configure({
     await refreshStatus();
   },
 
+  async onInactive(code: string, message: string) {
+    // Same as the REST 403 COMPANY_INACTIVE / TERMINAL_INACTIVE path.
+    await noteError({ status: 403, code, message });
+    await refreshStatus();
+  },
+
   async onUpdateRequired(min: string | null) {
     // Same as the REST 426 path.
     await noteError({ status: 426, code: 'APP_UPDATE_REQUIRED', message: 'App update required', minAppVersion: min });
@@ -559,7 +595,7 @@ async function runCycle(): Promise<boolean> {
     // Subscription locked: the realtime handshake and the catalog are refused (403) until it is paid — check in by
     // heartbeat / bootstrap polling meanwhile (their `license` says when it is unlocked).
     const locked = (await localStore.getLicenseRecord().catch(() => null))?.locked === true;
-    realtime.setWanted(started && !idle && !flags.updateRequired && !locked && netConnected !== false && foreground);
+    realtime.setWanted(started && !idle && !flags.updateRequired && !locked && platformInactive() === null && netConnected !== false && foreground);
     if (idle) return true;
     if (netConnected === false) {
       reachable = null;
@@ -574,7 +610,7 @@ async function runCycle(): Promise<boolean> {
     // app must be recorded before its first sync, or that sync is refused as 'update required'. While the real-time
     // socket is live its hello already did that (and its notices replace the polling), so no heartbeat then — except
     // for a manual "Sync now", which always re-checks the catalog version this way.
-    if (check || (!realtime.isLive() && (reachable !== true || Date.now() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS))) {
+    if (check || platformInactive() !== null || (!realtime.isLive() && (reachable !== true || Date.now() - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS))) {
       await heartbeat();
       contacted = true;
     }
@@ -598,6 +634,7 @@ async function runCycle(): Promise<boolean> {
     } else if (approversTarget !== null && Date.now() - approversTriedAt >= APPROVERS_RETRY_MS) {
       await refreshApprovers(false); // a notice arrived while no cashier was signed in online
     }
+    if (contacted) clearInactive();
     if (contacted) setStatus({ lastError: null, lastSyncAt: new Date().toISOString() });
     // A live real-time socket is server contact too (its hello/state replace the heartbeat).
     if (contacted || realtime.isLive()) await noteCheckIn();

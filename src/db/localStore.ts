@@ -56,7 +56,7 @@ import { money } from '../sale/money';
 import { initDatabase, json, jsonOrNull, num, rows, str, strOrNull, withDb, type BatchCommand, type Conn, type Row } from './database';
 import { emitLocalStoreEvent } from './events';
 import { Mutex } from './mutex';
-import { APP_VERSION, AUTO_TIME_OFF_MESSAGE, blockReason, compareVersions, offlineWarning, UNKNOWN_MIN_VERSION } from './policy';
+import { APP_VERSION, AUTO_TIME_OFF_MESSAGE, blockReason, compareVersions, offlineWarning, platformInactive, UNKNOWN_MIN_VERSION } from './policy';
 
 const counterLock = new Mutex();
 
@@ -717,6 +717,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
       const blocked =
         blockReason({
           revoked: pre.revoked,
+          inactive: platformInactive() !== null,
           updateRequired: pre.updateRequired,
           terminal: pre.terminal,
           pendingOldestAt: pre.pending.oldestAt,
@@ -783,8 +784,8 @@ export const localStore: LocalStore & LocalStoreExtras = {
     }));
     if (!pre.enrollment) throw new Error('This device is not enrolled.');
     if (pre.revoked) throw new Error('This device has been revoked.');
-    // Device clock trust: the void's time decides stock effects, so a tablet on a manual clock cannot void either.
-    if (!(await autoTime.isOn())) throw new Error(AUTO_TIME_OFF_MESSAGE);
+    // Automatic date & time off does NOT block a void (user decision 2026-10-22: only selling is ever blocked): its
+    // clock report says auto_time false and the server counts the void's stock time as untrusted (upload time).
     if (!pre.sale) throw new Error('Sale not found on this device');
     if (strOrNull(pre.sale.voided_at)) throw new Error('This sale is already voided');
     if (str(pre.sale.sync_status) === 'REJECTED') throw new Error('This sale was rejected by the server and cannot be voided');
@@ -1185,6 +1186,7 @@ export const localStore: LocalStore & LocalStoreExtras = {
       const pending = await readPending(conn);
       return blockReason({
         revoked: (await readMeta(conn, META_REVOKED)) === '1',
+        inactive: platformInactive() !== null,
         updateRequired: await readUpdateRequired(conn),
         terminal: await readTerminal(conn),
         pendingOldestAt: pending.oldestAt,

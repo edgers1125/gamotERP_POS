@@ -55,13 +55,16 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   challenge (2 distinct steps, random order, expo-crypto bytes).
 - **Liveness** (`liveness.ts`, pure; ML Kit data from `modules/pos-face`): START = one face, |yaw| ≤ 12° held 0.5 s
   (frame 0); BLINK = both eyes ≥ 0.6 → both ≤ 0.3 → ≥ 0.6 (frame when they reopen); TURN_LEFT/RIGHT = own-side yaw ≥
-  20° and ≥ 15° from START (frame then). 10 s for START, 8 s per step → FAILED ("Try again" / "Record anyway"; a frame is
-  still taken for the failed step). **Own left = ML Kit `headEulerAngleY` POSITIVE** ("looking to the right of the
+  20° and ≥ 15° from START (frame then). 10 s for START, 8 s per step → FAILED (a frame is
+  still taken for the failed step). **Online (ticketed) punch = the check MUST pass** (server release 2.28: failed /
+  skipped / no photo → 422 `LIVENESS_FAILED`, nothing stored, ticket stays usable): `LivenessCapture requirePass` shows only
+  "Try again" / "Cancel" (no "Record anyway" / "Record without photo"; camera trouble → "fix the camera or ask your
+  manager"). **Offline** punches keep "Try again" / "Record anyway" and "Record without photo" (flagged for HR). **Own left = ML Kit `headEulerAngleY` POSITIVE** ("looking to the right of the
   camera"; contract: the nose moves to the raw image's right) — `OWN_LEFT_YAW_SIGN`, one place. The preview is mirrored,
   so "turn left" = toward the screen's left (arrow shown); saved frames are NOT mirrored. No camera / permission refused /
-  engine error / camera not starting in 8 s → "Record without photo" (`SKIPPED` + `NO_CAMERA` | `PERMISSION_DENIED` |
-  `ENGINE_FAILED` | `TIMEOUT`, no frames → server `KIOSK_PIN_ONLY` + `LIVENESS_SKIPPED`). A camera problem never blocks
-  a punch (only readiness and the lock above do).
+  engine error / camera not starting in 8 s → (offline only) "Record without photo" (`SKIPPED` + `NO_CAMERA` | `PERMISSION_DENIED` |
+  `ENGINE_FAILED` | `TIMEOUT`, no frames → server `KIOSK_PIN_ONLY` + `LIVENESS_SKIPPED`). Offline, a camera problem never blocks
+  a punch (only readiness and the lock above do); online it blocks until the camera works.
 - **Frames:** taken from the analysed stream (~640×480) DURING the challenge: rotated upright, ≤ `capture.max_side_px`,
   JPEG at `jpeg_quality` lowered in steps of 10 until ≤ `max_frame_bytes`, fsync'd, sha256 computed natively. 2–3 per
   punch, index 0 = START. Plain files in app-private storage (`filesDir/attendance_frames/`, `allowBackup` false).
@@ -71,8 +74,10 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   any upload (online too). `pushPunches()` (sync engine cycle, after the outbox; and the kiosk right after a punch, waiting
   ≤ 12 s for the answer) sends PENDING rows oldest first as multipart (`punch` = the stored signed text, never
   re-serialised; `signature`; `frame0..n` straight from disk): RECORDED / DUPLICATE → done + photos deleted from the
-  tablet; 422 REJECTED, 400/409/413/415, a stored row that no longer matches its signature or a missing photo → kept as
-  REJECTED (with photos) and listed on the kiosk ("Not accepted: N"); network / 5xx / 401 / 429 → stays PENDING (engine
+  tablet; 422 REJECTED, 404 (person no longer active), 400/409/413/415, a stored row that no longer matches its signature or a missing photo → kept as
+  REJECTED (with photos; never retried) and listed on the kiosk ("Not accepted: N"). A ticketed punch rejected with
+  `LIVENESS_FAILED` (`isLivenessRefusal`, punch.ts; code kept in the stored result) is NOT shown as "tell your manager":
+  the kiosk shows the server's message and returns to the camera with the SAME ticket + steps (still listed under "Not accepted"); network / 5xx / 401 / 429 → stays PENDING (engine
   backoff); 403 `ATTENDANCE_KIOSK_OFF` → stays PENDING, retried after 15 min or once the kiosk answers ON. Leftover frame
   files (abandoned captures) are pruned after 10 min. The kiosk header shows "Unsent punches: N". Punches are NOT in the
   sales outbox / heartbeat `pending_ops`.

@@ -17,6 +17,7 @@ import { VoidDialog } from '../components/shell/VoidDialog';
 import type { LocalSale } from '../contracts';
 import { api } from '../api/client';
 import { localStore } from '../db/localStore';
+import { serverClock } from '../device/serverClock';
 import { formatPeso } from '../sale/money';
 import { useSyncStatus } from '../sync/syncEngine';
 import { Banner, Button, Screen } from '../ui/components';
@@ -115,8 +116,27 @@ export function SalesTodayScreen({ navigation }: Props) {
   const online = useSyncStatus((s) => s.online);
   const lastSyncAt = useSyncStatus((s) => s.lastSyncAt);
   const cashier = useCashier((s) => s.cashier);
-  const today = businessDate(new Date());
+  // "Today" on the same clock as sold_at / voided_at (serverClock.corrected — the void's own check uses it too), so the
+  // Void / Refund buttons don't flip on the wrong side of midnight when the tablet's wall clock is off.
+  const [today, setToday] = useState(() => businessDate(new Date()));
   const [date, setDate] = useState(today);
+  useEffect(() => {
+    let alive = true;
+    void serverClock
+      .corrected()
+      .then((t) => {
+        if (!alive) return;
+        const corrected = businessDate(new Date(t.nowMs));
+        setToday((prev) => {
+          if (prev !== corrected) setDate((d) => (d === prev ? corrected : d));
+          return corrected;
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [lastSyncAt]);
   const [local, setLocal] = useState<LocalSale[]>([]);
   const [server, setServer] = useState<PosSaleRow[]>([]);
   const [serverNote, setServerNote] = useState<string | null>(null);

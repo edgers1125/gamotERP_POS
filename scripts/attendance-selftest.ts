@@ -16,6 +16,7 @@ import {
   deviceChallenge,
   framesFromJson,
   framesToJson,
+  isLivenessRefusal,
   punchMessage,
   punchPayloadProblem,
   punchPayloadText,
@@ -307,6 +308,12 @@ const base: BuildPunchInput = {
   check('upload fields: punch then signature', parts.fields[0]![0] === 'punch' && parts.fields[0]![1] === text && parts.fields[1]![0] === 'signature');
   check('upload files frame0..2 in order', parts.files.map((f) => f.name).join() === 'frame0,frame1,frame2' && parts.files.every((f) => f.type === 'image/jpeg'));
 }
+
+// ---- liveness refusal (server 2.28: online punch without a passed face check) ----------------------------------------
+
+check('LIVENESS_FAILED rejection is recognised', isLivenessRefusal({ status: 'REJECTED', result: { status: 'REJECTED', code: 'LIVENESS_FAILED' } }));
+check('another rejection is not', !isLivenessRefusal({ status: 'REJECTED', result: { status: 'REJECTED', code: 'PIN_INVALID' } }) && !isLivenessRefusal({ status: 'REJECTED', result: null }));
+check('a recorded punch / null is not', !isLivenessRefusal({ status: 'RECORDED', result: { code: 'LIVENESS_FAILED' } }) && !isLivenessRefusal(null));
 
 // ---- wording ----------------------------------------------------------------------------------------------------
 

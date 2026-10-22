@@ -29,6 +29,8 @@ type TerminalLimits = Pick<PosTerminalInfo, 'offline_max_hours' | 'offline_max_s
 
 export interface BlockInputs {
   revoked: boolean;
+  /** The server answered 403 COMPANY_INACTIVE / TERMINAL_INACTIVE / MODULE_NOT_INCLUDED (see `platformInactive`). */
+  inactive?: boolean;
   updateRequired: string | null;
   terminal: TerminalLimits | null;
   pendingOldestAt: string | null;
@@ -42,6 +44,26 @@ export interface BlockInputs {
 
 export const REVOKED_MESSAGE =
   'This device has been revoked. Selling is disabled — ask your administrator to enroll a new device.';
+
+// ---- paused by the administrator (403 COMPANY_INACTIVE / TERMINAL_INACTIVE / MODULE_NOT_INCLUDED) ----------------------
+export const INACTIVE_MESSAGE =
+  'This till is paused by the administrator (company/terminal deactivated). Unsent sales stay on this tablet.';
+
+export interface InactiveInfo {
+  code: string;
+  /** The server's own message (shown on the Check-in screen). */
+  message: string;
+}
+export const INACTIVE_CODES: readonly string[] = ['COMPANY_INACTIVE', 'TERMINAL_INACTIVE', 'MODULE_NOT_INCLUDED'];
+// In memory only: set by the sync engine on those 403s, cleared on the next successful device call. The device is NOT
+// revoked and nothing is deleted; after an app restart the first check-in sets it again.
+let inactiveInfo: InactiveInfo | null = null;
+export function setPlatformInactive(info: InactiveInfo | null): void {
+  inactiveInfo = info;
+}
+export function platformInactive(): InactiveInfo | null {
+  return inactiveInfo;
+}
 
 // ---- device clock (docs/plans/pos-android-app.md "Device clock trust") ------------------------------------------------
 /** The text the Sell screen matches to show the "Open Date & time settings" button — keep it a single constant. */
@@ -165,9 +187,10 @@ export function attendanceBlockReason(input: Pick<BlockInputs, 'revoked' | 'upda
   return null;
 }
 
-/** Why selling is blocked right now, or null. Order: revoked, app update, automatic time off, subscription locked / license, offline limits. */
+/** Why selling is blocked right now, or null. Order: revoked, paused (inactive), app update, automatic time off, subscription locked / license, offline limits. */
 export function blockReason(input: BlockInputs): string | null {
   if (input.revoked) return REVOKED_MESSAGE;
+  if (input.inactive) return INACTIVE_MESSAGE;
   if (input.updateRequired) return updateRequiredMessage(input.updateRequired);
   if (input.autoTimeOn === false) return AUTO_TIME_OFF_MESSAGE;
   return licenseBlockReason(input.license) ?? offlineLimitReason(input);

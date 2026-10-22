@@ -12,7 +12,7 @@ import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, shadow, spacing } from '../../ui/theme';
 import { findByBarcode, findBySkuCode, groupByModel, hasBarcode, searchCatalogStrict, type CatalogGroup } from '../../sale/catalogSearch';
 import { useCashier } from '../../auth/cashierSession';
-import { priceAt } from '../../sale/cart';
+import { priceAt, shownPrice, useCart } from '../../sale/cart';
 import { formatPeso } from '../../sale/money';
 import { BarcodeScannerPanel, type ScanOutcome } from './BarcodeScannerPanel';
 import { ModelPickerSheet } from './ModelPickerSheet';
@@ -22,11 +22,12 @@ import { StatusBadge } from './ui';
 const SEARCH_LIMIT = 200;
 
 /** The priced SKUs of a group at the channel, with the price range. */
-function sellableOf(group: CatalogGroup, channelId: number | null) {
+function sellableOf(group: CatalogGroup, channelId: number | null, pricesIncludeVat: boolean) {
   const priced: { item: PosCatalogItem; price: number }[] = [];
   for (const item of group.items) {
     const p = priceAt(item, channelId);
-    if (p !== null) priced.push({ item, price: Number(p) });
+    // As the cart will show it: VAT included on a vatable item in VAT-inclusive mode (cart.ts shownPrice).
+    if (p !== null) priced.push({ item, price: shownPrice({ pricesIncludeVat }, { isVatable: item.is_vatable }, Number(p)) });
   }
   const prices = priced.map((x) => x.price);
   return {
@@ -55,6 +56,7 @@ export function ProductSearch({
 }) {
   const styles = useStyles();
   const theme = useThemeColors();
+  const pricesIncludeVat = useCart((s) => s.pricesIncludeVat);
   const canOverride = useCashier((s) => s.cashier?.permissions.includes('itemtracker.pickoverride') ?? false);
   const [overrideOn, setOverrideOn] = useState(false);
   const override = canOverride && overrideOn;
@@ -155,7 +157,7 @@ export function ProductSearch({
       setQuery('');
     } else if (groups.length === 1) {
       // Several SKUs, all of one model: add the only priced one, or let the cashier pick.
-      const sellable = sellableOf(groups[0]!, channelId).items;
+      const sellable = sellableOf(groups[0]!, channelId, pricesIncludeVat).items;
       if (sellable.length === 1) {
         add(sellable[0]!);
         setQuery('');
@@ -171,7 +173,7 @@ export function ProductSearch({
   }
 
   function pressGroup(group: CatalogGroup) {
-    const sellable = sellableOf(group, channelId).items;
+    const sellable = sellableOf(group, channelId, pricesIncludeVat).items;
     if (sellable.length === 1) add(sellable[0]!);
     else if (sellable.length > 1) setPicking(group);
   }
@@ -233,7 +235,7 @@ export function ProductSearch({
           <Text style={styles.empty}>{catalog ? (query ? 'No item matches.' : 'The price list is empty.') : 'Loading the price list…'}</Text>
         }
         renderItem={({ item: group }) => {
-          const { items: sellable, min, max } = sellableOf(group, channelId);
+          const { items: sellable, min, max } = sellableOf(group, channelId, pricesIncludeVat);
           const unavailable = sellable.length === 0;
           const options = group.items.length;
           const scPwd = group.items.some((i) => i.sc_pwd_eligible);

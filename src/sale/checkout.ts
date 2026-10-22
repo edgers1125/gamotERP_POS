@@ -93,12 +93,13 @@ export async function completeSale(input: {
   approval: Approval | null;
   online: boolean;
   soldAt?: Date;
-  /** The clock report taken together with `soldAt` (src/device/clockStamp.ts); stamped here when absent. */
+  /** The clock report taken together with `soldAt` (src/device/clockStamp.ts; absent on an old native build). Without
+   * `soldAt` both are stamped here. */
   clock?: PosClockReport;
 }): Promise<LocalSale> {
   const { state, payments, methods, approval, online } = input;
   // sold_at = device clock + the learned server offset (PosClockReport); the report rides along in the signed payload.
-  const stamp = input.soldAt && input.clock ? { at: input.soldAt, clock: input.clock } : await stampClock();
+  const stamp = input.soldAt ? { at: input.soldAt, clock: input.clock } : await stampClock();
   const soldAt = stamp.at;
   const cashier = cashierSession.current();
   if (!cashier) throw new Error('Sign in as a cashier first.');

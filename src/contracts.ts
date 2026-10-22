@@ -208,7 +208,9 @@ export interface SyncStatus {
   rejected: number;
   revoked: boolean;
   updateRequired: string | null; // min_app_version when this app is too old
-  /** Non-null → selling is blocked (revoked, update required, subscription locked / license expired, offline limits). */
+  /** Non-null → the server answered 403 COMPANY_INACTIVE / TERMINAL_INACTIVE / MODULE_NOT_INCLUDED: paused by the administrator (not revoked). Cleared by the next successful call. */
+  inactive: { code: string; message: string } | null;
+  /** Non-null → selling is blocked (revoked, paused/inactive, update required, subscription locked / license expired, offline limits). */
   blockedReason: string | null;
   /** The subscription is locked (403 SUBSCRIPTION_LOCKED, realtime 4402 or a check-in's license.state LOCKED). */
   subscriptionLocked: boolean;

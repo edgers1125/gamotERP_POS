@@ -4,7 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 import type { PosCatalogItem } from '@pos-api/contract';
 import { makeStyles } from '../../ui/brandTheme';
 import { radius, spacing } from '../../ui/theme';
-import { priceAt } from '../../sale/cart';
+import { priceAt, shownPrice, useCart } from '../../sale/cart';
 import { formatPeso } from '../../sale/money';
 import { variantLabelOf, type CatalogGroup } from '../../sale/catalogSearch';
 import { Sheet } from './ui';
@@ -25,13 +25,16 @@ export function ModelPickerSheet({
   onClose: () => void;
 }) {
   const styles = useStyles();
+  const pricesIncludeVat = useCart((s) => s.pricesIncludeVat);
   const items = group ? [...group.items].sort((a, b) => a.pack_quantity - b.pack_quantity || a.sku_id - b.sku_id) : [];
   return (
     <Sheet visible={group !== null} title={group?.name ?? ''} onClose={onClose}>
       <Text style={styles.hint}>Choose which one to add.</Text>
       <View style={styles.list}>
         {items.map((item) => {
-          const price = priceAt(item, channelId);
+          const raw = priceAt(item, channelId);
+          // As the cart will show it (VAT included on a vatable item in VAT-inclusive mode).
+          const price = raw === null ? null : shownPrice({ pricesIncludeVat }, { isVatable: item.is_vatable }, Number(raw));
           const off = price === null;
           const label = variantLabelOf(item);
           return (

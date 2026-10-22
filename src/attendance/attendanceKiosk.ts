@@ -9,7 +9,10 @@
 //   JWS as a sync op) and saves it with its photo files in ONE row of attendance_punches — online or offline, BEFORE any
 //   upload, so a punch is never lost. `push()` (the sync engine's cycle + the kiosk right after a punch) uploads
 //   PENDING rows oldest first, one multipart POST each, idempotent by client_uuid (a repeat answers DUPLICATE):
-//   RECORDED / DUPLICATE → done, photos deleted from the tablet; 422 REJECTED → kept (photos too) for a manager;
+//   RECORDED / DUPLICATE → done, photos deleted from the tablet; 422 REJECTED, 404 (person no longer active) and
+//   400/409/413/415 → kept (photos too) for a manager, never retried (they'd fail identically); a 422 LIVENESS_FAILED
+//   (an ONLINE punch whose face check wasn't passed — server 2.28+) keeps its code in the result so the kiosk can offer
+//   "try again" with the same ticket (`isLivenessRefusal`);
 //   network / 5xx / 401 / 429 → stays PENDING and the engine backs off; 403 ATTENDANCE_KIOSK_OFF → stays PENDING (the
 //   server refuses uploads from a terminal that is no longer a kiosk — see CLAUDE.md "open issues").
 import * as Crypto from 'expo-crypto';
@@ -36,6 +39,7 @@ import {
   deviceChallenge,
   framesFromJson,
   framesToJson,
+  isLivenessRefusal,
   punchPayloadText,
   randomIntFromBytes,
   storedPunchProblem,
@@ -306,6 +310,8 @@ async function flipSuggestion(userId: number, kind: 'IN' | 'OUT'): Promise<void>
   await saveCache(deviceId, { enabled: true, reason: null, kiosk: s.kiosk, employees });
 }
 
+export { isLivenessRefusal };
+
 export async function getPunch(clientUuid: string): Promise<LocalPunch | null> {
   const r = await withDb(async (conn) => rows(await conn.execute('SELECT * FROM attendance_punches WHERE client_uuid = ?', [clientUuid]))[0]);
   return r ? punchFromRow(r) : null;
@@ -329,8 +335,8 @@ async function markAttempt(seq: number, error: string): Promise<void> {
 }
 
 /** Kept, visibly, as REJECTED — something the server can never accept as signed (never retried unchanged). */
-async function markRejected(seq: number, clientUuid: string, error: string): Promise<void> {
-  const result: PosAttendancePunchResult = {
+async function markRejected(seq: number, clientUuid: string, error: string, code?: string | null): Promise<void> {
+  const result: PosAttendancePunchResult & { code?: string } = {
     client_uuid: clientUuid,
     status: 'REJECTED',
     punch_id: null,
@@ -338,6 +344,7 @@ async function markRejected(seq: number, clientUuid: string, error: string): Pro
     flags: [],
     employees_version: '',
     error,
+    ...(code ? { code } : {}),
   };
   const now = new Date().toISOString();
   await withDb((conn) =>
@@ -455,8 +462,9 @@ async function pushInner(): Promise<boolean> {
           await markAttempt(seq, err.message);
           continue;
         }
-        if (err.status === 400 || err.status === 409 || err.status === 413 || err.status === 415) {
-          await markRejected(seq, clientUuid, `Refused by the server: ${err.message}`);
+        if (err.status === 400 || err.status === 404 || err.status === 409 || err.status === 413 || err.status === 415 || err.status === 422) {
+          // 404 = person no longer active; 422 = refused (e.g. LIVENESS_FAILED): identical on every retry, so never PENDING.
+          await markRejected(seq, clientUuid, err.status === 422 ? err.message : `Refused by the server: ${err.message}`, err.code);
           continue;
         }
         await markAttempt(seq, err.message);

@@ -110,11 +110,13 @@ export function SellScreen({ navigation }: SellScreenProps) {
     // Not before the cached bootstrap is read (null while loading) — that would drop every line's promo (and choice).
     if (data.bootstrap) useCart.getState().setPromos(promos);
   }, [data.bootstrap, promos]);
-  // VAT-inclusive prices at a VAT-registered company (bootstrap receipt.vat_registered) — the web Branch Sales rule.
-  useEffect(() => {
-    if (data.bootstrap) useCart.getState().setPricesIncludeVat(pricesIncludeVatOf(data.bootstrap));
-  }, [data.bootstrap]);
   const hasLines = cart.lines.length > 0;
+  // VAT-inclusive prices at a VAT-registered company (bootstrap receipt.vat_registered) — the web Branch Sales rule.
+  // Frozen for the sale in progress: a setting change re-read mid-sale applies from the next sale (cart empty again),
+  // so the amount due never moves under the cashier (the server accepts the device's mode and flags a mismatch).
+  useEffect(() => {
+    if (data.bootstrap && !hasLines) useCart.getState().setPricesIncludeVat(pricesIncludeVatOf(data.bootstrap));
+  }, [data.bootstrap, hasLines]);
   useEffect(() => {
     if (!hasLines || promos.length === 0) return;
     const t = setInterval(() => useCart.getState().refreshPromos(), PROMO_TICK_MS);

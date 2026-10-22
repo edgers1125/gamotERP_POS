@@ -33,7 +33,7 @@ export function SoldByDialog({
     <Sheet visible={visible} title="Who sold it?" onClose={onClose} width={640}>
       {staff.length === 0 ? (
         <HintText>
-          No one is on this branch’s Sales Staff yet — a manager adds them in Branches › Manage Access › Sales Staff. A sale can’t be completed until
+          No one is on this branch’s Sales Staff yet — a manager adds them in Branches › Team › Sales Staff. A sale can’t be completed until
           then.
         </HintText>
       ) : (

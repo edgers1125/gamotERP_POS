@@ -1,8 +1,10 @@
 // The attendance kiosk's camera step: a mirrored front-camera preview (modules/pos-face), the 2-step liveness challenge
 // run by src/attendance/liveness.ts on ML Kit's face data, and 2–3 photos taken DURING it (START, then one per step).
-// Hands back the liveness report + the saved frame files; never blocks a punch: no camera / permission refused / the
-// engine failing → "Record without photo" (liveness SKIPPED, the server flags LIVENESS_SKIPPED); a challenge that
-// times out → "Try again" or "Record anyway" (FAILED, flagged LIVENESS_FAILED).
+// Hands back the liveness report + the saved frame files. `requirePass` (an ONLINE punch — it carries a PIN ticket; the
+// server refuses it unless the face check PASSED, 422 LIVENESS_FAILED, release 2.28): no "Record anyway" / "Record
+// without photo" — only "Try again" / "Cancel". Without it (OFFLINE punch, flagged for HR): no camera / permission
+// refused / the engine failing → "Record without photo" (SKIPPED, flagged LIVENESS_SKIPPED); a challenge that times out
+// → "Try again" or "Record anyway" (FAILED, flagged LIVENESS_FAILED).
 import { useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
@@ -45,9 +47,12 @@ export function LivenessCapture({
   onDone,
   onCancel,
   onActivity,
+  requirePass,
 }: {
   steps: AttendanceLivenessStep[];
   capture: PosAttendanceCapture;
+  /** True for an online (ticketed) punch: the face check must pass — no way to record without it. */
+  requirePass: boolean;
   onDone: (outcome: LivenessOutcome) => void;
   onCancel: () => void;
   /** Called while the person is in front of the camera (keeps the kiosk's idle timer from resetting). */
@@ -123,7 +128,7 @@ export function LivenessCapture({
           <View style={styles.actions}>
             <Text style={styles.body}>Allow the camera so the punch has a photo.</Text>
             <Button title="Allow camera" onPress={() => void requestPermission()} />
-            <Button title="Record without photo" variant="secondary" onPress={() => skip('PERMISSION_DENIED')} />
+            {requirePass ? null : <Button title="Record without photo" variant="secondary" onPress={() => skip('PERMISSION_DENIED')} />}
           </View>
         ) : null}
       </View>
@@ -133,9 +138,18 @@ export function LivenessCapture({
   if (phase.kind === 'unavailable') {
     return (
       <View style={styles.center}>
-        <Banner kind="warning" title="No photo this time" message={`${phase.message} You can still record the punch — HR will review it.`} style={styles.banner} />
+        <Banner
+          kind="warning"
+          title={requirePass ? "The face check can't run" : 'No photo this time'}
+          message={
+            requirePass
+              ? `${phase.message} Clocking in online needs the face check. Fix the camera (or ask your manager), then try again.`
+              : `${phase.message} You can still record the punch — HR will review it.`
+          }
+          style={styles.banner}
+        />
         <View style={styles.actionsRow}>
-          <Button title="Record without photo" onPress={() => skip(phase.reason)} />
+          {requirePass ? null : <Button title="Record without photo" onPress={() => skip(phase.reason)} />}
           {phase.canRetry ? (
             <Button
               title="Try again"
@@ -158,7 +172,11 @@ export function LivenessCapture({
         <Banner
           kind="warning"
           title="We couldn't confirm the movement"
-          message="Try again, looking straight at the camera with your face in the oval. Or record the punch now — HR will review it."
+          message={
+            requirePass
+              ? "We couldn't confirm the movement. Try again, looking straight at the camera with your face in the oval."
+              : 'Try again, looking straight at the camera with your face in the oval. Or record the punch now — HR will review it.'
+          }
           style={styles.banner}
         />
         <View style={styles.actionsRow}>
@@ -170,11 +188,13 @@ export function LivenessCapture({
               setPhase({ kind: 'running' });
             }}
           />
-          <Button
-            title="Record anyway"
-            variant="secondary"
-            onPress={() => onDone({ liveness: { result: 'FAILED', steps: phase.steps, engine: ENGINE }, frames: phase.frames })}
-          />
+          {requirePass ? null : (
+            <Button
+              title="Record anyway"
+              variant="secondary"
+              onPress={() => onDone({ liveness: { result: 'FAILED', steps: phase.steps, engine: ENGINE }, frames: phase.frames })}
+            />
+          )}
           <Button
             title="Cancel"
             variant="ghost"

@@ -5,10 +5,11 @@
 //   and stop on time OFFLINE. An older server doesn't send the field → no promos.
 // * THE price rule is the backend's `@shared/promos/promo-math` (integer centavos, half-up; in force
 //   starts_at ≤ t < ends_at; two in force on one SKU → the lower price) — never re-implemented here.
-// * The clock: a promo is judged at the moment the sale is recorded, on the DEVICE clock — the same instant that goes out
-//   as `sold_at` (checkout.ts), because the server checks the line against the promo in force at `sold_at`. Like every
-//   other sale time it is not corrected by the server-clock offset (src/device/serverClock.ts: DPoP only); a tablet whose
-//   clock is off is flagged CLOCK_DRIFT by the server, and a promo charged outside its window PRICE_MISMATCH (recorded as
+// * The clock: a promo is judged at the moment the sale is recorded — the same instant that goes out as `sold_at`
+//   (checkout.ts), because the server checks the line against the promo in force at `sold_at`. Since 2026-10-12 that
+//   instant is the corrected time (src/device/clockStamp.ts `stampClock()`: device clock + the learned server offset,
+//   PaymentScreen passes it to `refreshPromos(soldAt)` and to checkout); the Sell screen's 15 s tick uses the wall clock
+//   (display only — Complete sale re-checks). A tablet whose time is still off is flagged CLOCK_DRIFT by the server, and a promo charged outside its window PRICE_MISMATCH (recorded as
 //   charged, never rejected).
 // * A cart line keeps its REGULAR channel price (`unitPrice` / `unitPriceText`) and carries the promo that applies
 //   (`promo`) + on a Senior/PWD sale the cashier's choice (`promoChoice`); what is charged is derived (`chargedLine`).

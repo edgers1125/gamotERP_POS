@@ -22,6 +22,7 @@ import { errorMessage, formatAge, formatDateTime, shiftDate } from '../component
 import type { LocalSale } from '../contracts';
 import type { LicenseCode } from '../license/lease';
 import { localStore } from '../db/localStore';
+import { serverClock } from '../device/serverClock';
 import { formatPeso } from '../sale/money';
 import { syncEngine, useSyncStatus } from '../sync/syncEngine';
 import { Banner, Button, Screen } from '../ui/components';
@@ -78,7 +79,8 @@ export function SyncStatusScreen(_props: Props) {
     setError(null);
     try {
       const [p, r] = await Promise.all([localStore.pendingCount(), localStore.rejectedOps()]);
-      const today = businessDate(new Date());
+      // Same clock as sold_at (corrected time), so the days listed are the sales' own business days.
+      const today = businessDate(new Date((await serverClock.corrected().catch(() => ({ nowMs: Date.now() }))).nowMs));
       const days = Array.from({ length: EXCEPTION_DAYS }, (_, i) => shiftDate(today, -i));
       const perDay = await Promise.all(days.map((d) => localStore.listSales(d)));
       const withIssues = perDay
@@ -149,7 +151,12 @@ export function SyncStatusScreen(_props: Props) {
         />
         <Line label="Last check-in" value={status.lastSyncAt ? `${formatDateTime(status.lastSyncAt)} (${formatAge(status.lastSyncAt)})` : 'Never'} />
         <Line label="Last error" value={status.lastError ?? 'None'} color={status.lastError ? c.danger : undefined} />
-        {status.blockedReason ? (
+        {status.inactive ? (
+          <View style={styles.groupBanner}>
+            <Banner kind="danger" title="Paused by the administrator" message={`${status.inactive.message} Unsent sales stay on this tablet and go out once it is reactivated.`} />
+          </View>
+        ) : null}
+        {status.blockedReason && !status.inactive ? (
           <View style={styles.groupBanner}>
             <Banner kind="danger" title="Selling blocked" message={status.blockedReason} />
           </View>

@@ -18,6 +18,7 @@ import type { AttendanceLivenessStep, PosAttendanceEmployee } from '@pos-api/con
 import { attendanceApi } from '../api/client';
 import {
   getPunch,
+  isLivenessRefusal,
   loadKiosk,
   newDeviceChallenge,
   pruneFrames,
@@ -164,6 +165,11 @@ export function AttendanceKioskScreen() {
       const after = (await uploadAndWait(saved.clientUuid, UPLOAD_WAIT_MS).catch(() => null)) ?? (await getPunch(saved.clientUuid).catch(() => null)) ?? saved;
       if (after.status === 'RECORDED' && after.result?.occurred_at) {
         setStage({ k: 'done', emp, kind, headline: punchMessage(kind, new Date(after.result.occurred_at), 'RECORDED'), detail: emp.display_name, tone: 'success' });
+      } else if (after.status === 'REJECTED' && ticket && isLivenessRefusal(after)) {
+        // Server 2.28+: an online punch needs a PASSED face check. Nothing was stored and the ticket is still unused, so
+        // go back to the camera with the SAME ticket + steps for a fresh attempt.
+        touch();
+        setStage({ k: 'camera', emp, kind, ticket, steps: ticket.steps, note: after.result?.error ?? after.lastError ?? 'The face check was not passed — please try again. Your time was not recorded.' });
       } else if (after.status === 'REJECTED') {
         setStage({
           k: 'done',
@@ -184,7 +190,7 @@ export function AttendanceKioskScreen() {
         });
       }
     },
-    [],
+    [touch],
   );
 
   const capture = kiosk?.capture ?? DEFAULT_CAPTURE;
@@ -237,6 +243,7 @@ export function AttendanceKioskScreen() {
               steps={stage.steps}
               capture={capture}
               onActivity={touch}
+              requirePass={!!stage.ticket}
               onCancel={goGrid}
               onDone={(outcome) => void save(stage.emp, stage.kind, stage.ticket, stage.steps, outcome)}
             />
@@ -287,7 +294,7 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
         <TextField placeholder="Search your name" value={search} onChangeText={setSearch} containerStyle={styles.search} autoCorrect={false} />
       </View>
       {employees.length === 0 ? (
-        <Banner kind="info" message="No staff are listed for this branch yet. HR adds them in HR → Employees (reporting branch = this branch)." style={styles.inlineBanner} />
+        <Banner kind="info" message="No staff are listed for this branch yet. HR adds them in HR → Employees (reporting branch = this branch, or stationed at it)." style={styles.inlineBanner} />
       ) : null}
       <FlatList
         key={columns}

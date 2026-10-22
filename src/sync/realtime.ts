@@ -21,6 +21,8 @@
 //   the engine wants it again; 1012 (server restart) / 1011 (server error) → a random 5–30 s wait first, so every
 //   tablet of every branch doesn't reconnect (and fetch a token + catch up) in the same second the server comes back —
 //   later failures continue from a ~8 s backoff; 4400 protocol error → logged, backoff; anything else (network) → backoff.
+// * 4003 COMPANY_INACTIVE / TERMINAL_INACTIVE / MODULE_NOT_INCLUDED (reason) → handed to the engine (`inactive`); the client
+//   stays down until the engine's next successful REST call clears it.
 // * 4402 SUBSCRIPTION_LOCKED → a 'locked' license signal (src/license/licenseEvents.ts) and the client stays down; the
 //   engine doesn't want the socket while the stored license is locked (heartbeat polling tells when it is paid).
 import type { RealtimeChanged, RealtimeHello, RealtimeServerMessage, RealtimeState, RealtimeStatus } from '@pos-api/contract';
@@ -42,6 +44,7 @@ const STATUS_THROTTLE_MS = 1_000;
 export const CLOSE_DEVICE_REVOKED = 4001;
 export const CLOSE_UPDATE_REQUIRED = 4026;
 export const CLOSE_SUBSCRIPTION_LOCKED = 4402;
+export const CLOSE_INACTIVE = 4003; // reason COMPANY_INACTIVE | TERMINAL_INACTIVE | MODULE_NOT_INCLUDED
 export const CLOSE_PROTOCOL_ERROR = 4400;
 export const CLOSE_SERVER_ERROR = 1011;
 export const CLOSE_SERVER_RESTART = 1012;
@@ -64,6 +67,8 @@ export interface RealtimeHandlers {
   /** 4001 / 4026 — the client has already stopped itself. */
   onRevoked(): Promise<void>;
   onUpdateRequired(minAppVersion: string | null): Promise<void>;
+  /** 4003 — company / terminal deactivated (or module missing); the client has stopped itself until the engine's next successful call. */
+  onInactive(code: string, message: string): Promise<void>;
   /** Connection state changed. `lost` = a live link dropped for a reason other than the idle recycle. */
   onConnectionChange(conn: RealtimeConnection, lost: boolean): void;
 }
@@ -272,6 +277,13 @@ async function connect(): Promise<void> {
       wanted = false;
       afterDown(sock, null, true);
       void handlers?.onUpdateRequired(lastMinAppVersion).catch(() => undefined);
+      return;
+    }
+    if (code === CLOSE_INACTIVE) {
+      wanted = false;
+      afterDown(sock, null, true);
+      const known = /COMPANY_INACTIVE|TERMINAL_INACTIVE|MODULE_NOT_INCLUDED/.exec(reason)?.[0] ?? 'TERMINAL_INACTIVE';
+      void handlers?.onInactive(known, reason || known).catch(() => undefined);
       return;
     }
     if (code === CLOSE_SUBSCRIPTION_LOCKED) {

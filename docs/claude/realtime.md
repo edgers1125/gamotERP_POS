@@ -15,7 +15,7 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
 - A WebSocket to `<server base URL>/pos/realtime` (http→ws, https→wss) carrying **notices only**; data still comes from
   the REST endpoints and every write stays REST (outbox `POST /pos/sync`, refunds). Handshake headers =
   `api/client.ts` `deviceAuthHeaders('GET', <http(s) URL>)` (device token + DPoP proof, htu = the http(s) form).
-- `syncEngine` owns it: wanted while enrolled, not revoked, no update required, network up, app in the foreground
+- `syncEngine` owns it: wanted while enrolled, not revoked, not paused (`inactive`), no update required, network up, app in the foreground
   (closed in the background). Open → `hello` (app version, pending ops, cached catalog / display / approvers
   versions); `state` → applied like a heartbeat reply, then whatever version differs is fetched; `changed` → catalog
   download / `displayService.refresh()` / the three approver lists (needs an online cashier — deferred until one exists,
@@ -30,4 +30,4 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   re-checks catalog (heartbeat) + display + approvers.
 - Keep-alive: RN never surfaces ping frames to JS (and its `ws.ping()` sends a BINARY frame — never use it), so any
   server message resets a 90 s idle timer; on expiry the socket is recycled at once (cheap: catch-up fetches nothing).
-  Backoff 1 s → 60 s exponential with jitter; close 1012/1011 → random 5–30 s first; 1013 (server's hello throttle) → usual backoff. Close 4001 → revoked, 4026 → update required, 4400 → logged + backoff.
+  Backoff 1 s → 60 s exponential with jitter; close 1012/1011 → random 5–30 s first; 1013 (server's hello throttle) → usual backoff. Close 4001 → revoked, **4003 → inactive** (reason `COMPANY_INACTIVE` / `TERMINAL_INACTIVE` / `MODULE_NOT_INCLUDED`: the engine sets `useSyncStatus().inactive`, selling is blocked, no reconnect; the same 403 on any REST device call does the same, and the next successful call clears it — heartbeat retries on the normal backoff, the outbox is untouched), 4026 → update required, 4400 → logged + backoff.
