@@ -30,7 +30,7 @@ offline** and syncs to the GamotERP backend.
 | `docs/claude/promos.md` | Store promos | touching store promos, promo price / Senior-PWD choice, promo payload fields (src/sale/promos.ts, cart.ts, PaymentScreen) |
 | `docs/claude/attendance-kiosk.md` | Attendance kiosk mode | touching the attendance kiosk, attendance-only tablets, liveness, the punch queue (src/attendance, modules/pos-face, AttendanceKioskScreen) |
 | `docs/claude/dev-setup.md` | Enrolling a device; Server URLs on the office Wi-Fi; Expo Go preview mode | setting up a dev device, changing server URLs, or touching any Expo Go fallback (isExpoGo, softwareDeviceKey, expoGoSqlite) |
-| `docs/claude/production.md` | Production checklist | preparing a release: HTTPS / pinning, attestation, printer driver, BIR accreditation |
+| `docs/claude/production.md` | Release signing; Production checklist | preparing a release: release signing (keystore, POS_APP_CERT_SHA256), HTTPS / pinning, attestation, printer driver, BIR accreditation |
 
 ## Shared code — one copy, used by the server and this app
 

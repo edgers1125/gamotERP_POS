@@ -47,7 +47,8 @@
           "cameraPermission": "Scan product barcodes, enrollment QR codes and Senior/PWD IDs"
         }
       ],
-      "./plugins/withNoCameraCompatRotation"
+      "./plugins/withNoCameraCompatRotation",
+      "./plugins/withReleaseSigning"
     ],
     "extra": {
       "note": "usesCleartextTraffic is for local development (http://10.0.2.2:4001). Release builds must use HTTPS with certificate pinning — see docs/plans/pos-android-app.md.",
