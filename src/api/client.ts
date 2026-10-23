@@ -30,6 +30,7 @@ import type {
   PosBootstrap,
   PosCatalog,
   PosClient,
+  PosClientCompany,
   PosDisplayConfig,
   PosDisplayImage,
   PosBrand,
@@ -369,6 +370,11 @@ export const api: PosApi = {
   async clients(search) {
     const res = await send<unknown>({ method: 'GET', path: '/pos/clients', query: { search: search.trim() }, auth: 'cashier' });
     return asArray<PosClient>(res, 'client');
+  },
+
+  async clientCompanies(search) {
+    const res = await send<unknown>({ method: 'GET', path: '/pos/client-companies', query: { search: search.trim() }, auth: 'cashier' });
+    return asArray<PosClientCompany>(res, 'client company');
   },
 
   async approvers(kind: PosApprovalKind) {

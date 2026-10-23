@@ -12,6 +12,7 @@ import { localStore } from '../db/localStore';
 import { syncEngine } from '../sync/syncEngine';
 import { cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, type CartState } from './cart';
 import { promoPayloadFields, promosCurrentAt } from './promos';
+import { amountDueOf, billingPayload, billingProblem, buyerTinOf, withholdingFigures } from './billing';
 import { discountInput, totalsPayload } from './totals';
 import { money } from './money';
 import { paymentsPayload, type PaymentDraft } from './payments';
@@ -116,6 +117,10 @@ export async function completeSale(input: {
   const needsApproval = discountNeedsApproval(totals);
   if (needsApproval && !approval) throw new Error('The discount needs an approver and their code.');
   const statutoryOn = state.statutory !== null;
+  // "Bill to company" (BIR Phase 1): the withholding on these totals (shared maths); none = old behaviour, no new fields.
+  const billProblem = billingProblem(state.billTo, totals);
+  if (billProblem) throw new Error(billProblem);
+  const billing = withholdingFigures(totals, state.billTo, state.pricesIncludeVat);
 
   const lines: SaleLinePayload[] = state.lines.map((l) => {
     const statutoryLine = isStatutoryLine(state, l);
@@ -159,6 +164,7 @@ export async function completeSale(input: {
     transaction_discount_reason: txHas ? state.txDiscountReason.trim() || null : null,
     discount_approval: needsApproval && approval ? { approved_by_user_id: approval.approvedByUserId, approval_code: approval.approvalCode } : null,
     statutory_discount: state.statutory ? statutoryPayload(state.statutory) : null,
+    ...billingPayload(state.billTo, billing),
     payments: paymentsPayload(payments, methods),
     note: state.note.trim() || null,
     totals: totalsPayload(totals),
@@ -169,6 +175,7 @@ export async function completeSale(input: {
   rememberReceiptSnapshot(sale.client_uuid, {
     lines: state.lines.map((l) => ({ skuId: l.skuId, name: l.name, isVatable: l.isVatable, scPwdEligible: l.scPwdEligible, promoName: l.promo?.name ?? null })),
     customerName: saleClientName(state),
+    buyer: state.billTo ? { name: state.billTo.company.name, address: state.billTo.company.address.trim() || null, tin: buyerTinOf(state.billTo) } : null,
     paymentMethods: methods,
     cashierName: cashier.name,
     soldByName: (await localStore.getBootstrap().catch(() => null))?.sales_staff.find((s) => s.id === state.soldById)?.name ?? null,

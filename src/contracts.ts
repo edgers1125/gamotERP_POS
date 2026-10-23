@@ -12,6 +12,7 @@ import type {
   PosBootstrap,
   PosCatalog,
   PosClient,
+  PosClientCompany,
   PosCounters,
   PosDisplayConfig,
   PosDisplayImage,
@@ -94,6 +95,8 @@ export interface PosApi {
   bootstrap(): Promise<PosBootstrap>;
   catalog(): Promise<PosCatalog>;
   clients(search: string): Promise<PosClient[]>;
+  /** "Bill to company" (BIR Phase 1): active client companies matching name / code / TIN (online only). */
+  clientCompanies(search: string): Promise<PosClientCompany[]>;
   approvers(kind: PosApprovalKind): Promise<PosApprover[]>;
   stock(skuIds: number[]): Promise<PosStockRow[]>;
   sales(date?: string): Promise<PosSaleRow[]>;

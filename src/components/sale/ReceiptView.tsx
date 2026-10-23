@@ -9,7 +9,7 @@
 // every size is scaled by the same factor, so proportions match the web receipt exactly.
 import { useEffect, useState, type ReactNode } from 'react';
 import { Image, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
-import { formatReceiptMoney, receiptPaperWidthMm, type ReceiptData, type ReceiptFontKey } from '@shared/receipt-layout';
+import { RECEIPT_NOT_VALID_FOR_INPUT_TAX, RECEIPT_VALIDITY_NOTE, formatReceiptMoney, receiptPaperWidthMm, type ReceiptData, type ReceiptFontKey } from '@shared/receipt-layout';
 import { fontFamily } from '../../ui/theme';
 
 const MM = 5; // dp per millimetre of paper
@@ -94,7 +94,12 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
       ) : null}
       {marks.voided ? <Banner>VOID</Banner> : null}
       {marks.is_return ? <Banner>RETURN</Banner> : null}
-      {marks.reprint ? <Center style={[bold, { letterSpacing: 0.25 * fs, marginBottom: 2 * MM }]}>*** REPRINT ***</Center> : null}
+      {marks.reprint ? (
+        <View style={{ marginBottom: 2 * MM }}>
+          <Center style={[bold, { letterSpacing: 0.25 * fs }]}>*** REPRINT ***</Center>
+          {data.reprinted_at_display ? <Center>Reprinted {data.reprinted_at_display}</Center> : null}
+        </View>
+      ) : null}
 
       {/* 1. Logo */}
       {settings.show_logo && settings.logo_url ? (
@@ -160,11 +165,14 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
       ) : null}
       <Divider strong />
       <Row label={`TOTAL: ${data.item_count} Item${data.item_count === 1 ? '' : 's'}`} value={m(data.total)} isBold text={em(1.2)} style={padRight(2.5)} />
+      {/* Withholding the buyer deducts (always printed, 0.00 when none) and what is left to pay (mirrors the web). */}
+      <Row label={data.withholding.label} value={m(data.withholding.amount)} style={[{ marginTop: 0.8 * MM }, padRight(3)]} />
+      <Row label="AMOUNT DUE" value={m(data.amount_due)} isBold text={em(1.12)} style={padRight(2.5)} />
       <View style={[{ marginTop: 1.2 * MM }, padRight(3)]}>
         {data.payments.map((p, i) => (
           <Row key={i} label={p.reference ? `${p.label} ${p.reference}` : p.label} value={m(p.amount)} />
         ))}
-        {/* The Cash payment row is what cash paid toward the total; this is the cash actually handed over. */}
+        {/* The Cash payment row is what cash paid toward the amount due; this is the cash actually handed over. */}
         {data.cash_received !== null ? <Row label="Cash received" value={m(data.cash_received)} /> : null}
       </View>
       {data.change !== null ? <Row label="CHANGE" value={m(data.change)} isBold text={em(1.12)} style={[{ marginTop: 0.8 * MM }, padRight(2.5)]} /> : null}
@@ -186,10 +194,10 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
 
       <Divider />
 
-      {/* 6. Trans No. + date/time */}
-      <Row label="Trans No." value={data.invoice_number ?? '—'} isBold />
+      {/* 6. Invoice No. + date/time + the system's transaction number */}
+      <Row label="Invoice No." value={data.invoice_number ?? '—'} isBold />
       <Row label="Date" value={data.issued_at_display} />
-      {data.sale_reference ? <Row label="Ref" value={data.sale_reference} text={small} /> : null}
+      {data.sale_reference ? <Row label="Transaction No." value={data.sale_reference} text={small} /> : null}
       {/* Who rang it up · who it is credited to (mirrors the web's SalesReceipt). */}
       {data.staff_line ? <T>{data.staff_line}</T> : null}
 
@@ -197,6 +205,7 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
 
       {/* 7. Title line + messages */}
       <Center style={[bold, em(1.05), { letterSpacing: 0.04 * fs * 1.05 }]}>{data.title_line}</Center>
+      {data.not_valid_for_input_tax ? <Center style={[bold, { marginTop: 1 * MM }]}>{RECEIPT_NOT_VALID_FOR_INPUT_TAX}</Center> : null}
       {data.message_lines.length > 0 ? (
         <View style={{ marginTop: 1.5 * MM }}>
           {data.message_lines.map((line, i) => (
@@ -226,8 +235,10 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
         <Center style={small}>
           Issued: {dash(data.provider.accreditation_issued)} · Until: {dash(data.provider.accreditation_valid_until)}
         </Center>
-        <Center style={small}>PTU No.: {dash(data.provider.ptu_no)}</Center>
-        <Center style={[small, bold, { marginTop: 1.5 * MM }]}>{data.provider.validity_note}</Center>
+        <Center style={small}>
+          PTU No.: {dash(data.provider.ptu_no)} · Date Issued: {dash(data.provider.ptu_issued)}
+        </Center>
+        <Center style={[small, bold, { marginTop: 1.5 * MM }]}>{data.provider.validity_note ?? RECEIPT_VALIDITY_NOTE}</Center>
       </View>
 
       {marks.reprint ? <Center style={[bold, { letterSpacing: 0.25 * fs, marginTop: 2.5 * MM }]}>*** REPRINT ***</Center> : null}

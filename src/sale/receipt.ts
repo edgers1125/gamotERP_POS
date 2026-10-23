@@ -13,6 +13,7 @@
 // below (ESC/POS plain text, same sections).
 import {
   DEFAULT_RECEIPT_LAYOUT_SETTINGS,
+  RECEIPT_NOT_VALID_FOR_INPUT_TAX,
   assembleReceipt,
   formatAddress,
   formatReceiptMoney,
@@ -49,6 +50,9 @@ export interface ReceiptSnapshot {
   // Names as they were at the sale (receipt "Cashier: X · Sold by: Y"). Absent on snapshots saved before 2026-10-07.
   cashierName?: string | null;
   soldByName?: string | null;
+  // "Bill to company" (BIR Phase 1): the buyer as printed — name, address and the TIN used (the company's, or the one
+  // typed at the sale). Absent = not billed to a company.
+  buyer?: { name: string; address: string | null; tin: string | null } | null;
 }
 
 // Snapshots of recent sales (client_uuid → snapshot); also persisted on the sale row (sales.receipt_json).
@@ -166,8 +170,20 @@ export function buildReceipt(
     branchAddress: terminal?.branch.address ?? '',
     branchTinCode: terminal?.branch.tin_branch_code ?? null,
     terminal: terminal
-      ? { code: terminal.code, birMin: terminal.bir.min, serialNumber: terminal.bir.serial_number, ptuNumber: terminal.bir.ptu_number }
+      ? { code: terminal.code, birMin: terminal.bir.min, serialNumber: terminal.bir.serial_number, ptuNumber: terminal.bir.ptu_number, ptuIssuedAt: terminal.bir.ptu_issued_at ?? null }
       : null,
+    // BIR Phase 1: the buyer + what it withheld come from the signed payload (a reprint of a synced sale prints the same
+    // figures); the reprint time is now. Absent fields = a walk-in / individual sale, withholding 0.00.
+    buyer: p.client_company_id != null ? (snap?.buyer ?? { name: `Company #${p.client_company_id}`, address: null, tin: p.buyer_tin ?? null }) : null,
+    withholding: p.withholding
+      ? {
+          ewtRate: Number(p.withholding.ewt_rate),
+          vatRate: Number(p.withholding.vat_rate),
+          ewtAmount: toCents(Number(p.withholding.ewt_amount)),
+          vatAmount: toCents(Number(p.withholding.vat_amount)),
+        }
+      : null,
+    reprintedAt: opts.reprint ? new Date() : null,
     statutory: statutory ? { type: statutory.type, idNumber: statutory.id_number, holderName } : null,
     // An existing client's address isn't on the device; a Senior/PWD card's address typed at the sale is.
     client: clientName ? { name: clientName, address: statutory?.address ? formatAddress(statutory.address) : null } : null,
@@ -270,7 +286,11 @@ export function receiptTextLines(r: ReceiptData): string[] {
   // 10. Marks
   if (r.marks.voided) banner('VOID');
   if (r.marks.is_return) banner('RETURN');
-  if (r.marks.reprint) push(center('*** REPRINT ***', w), '');
+  if (r.marks.reprint) {
+    push(center('*** REPRINT ***', w));
+    if (r.reprinted_at_display) push(center(`Reprinted ${r.reprinted_at_display}`, w));
+    push('');
+  }
   // 2. Heading
   centered(r.heading.business_name);
   r.heading.fixed_lines.forEach(centered);
@@ -296,6 +316,8 @@ export function receiptTextLines(r: ReceiptData): string[] {
   for (const a of r.adjustments) push(...lr(a.label, m(a.amount), w, col));
   push('='.repeat(w));
   push(...lr(`TOTAL: ${r.item_count} Item${r.item_count === 1 ? '' : 's'}`, m(r.total), w, col));
+  push(...lr(r.withholding.label, m(r.withholding.amount), w, col));
+  push(...lr('AMOUNT DUE', m(r.amount_due), w, col));
   for (const p of r.payments) push(...lr(p.reference ? `${p.label} ${p.reference}` : p.label, m(p.amount), w, col));
   if (r.cash_received !== null) push(...lr('Cash received', m(r.cash_received), w, col));
   if (r.change !== null) push(...lr('CHANGE', m(r.change), w, col));
@@ -311,15 +333,16 @@ export function receiptTextLines(r: ReceiptData): string[] {
   push(...lr('VAT Exemption', m(r.vat.vat_exemption), w, col));
   push(...wrap('V = Vatable · E = VAT-exempt · Z = Zero-rated', w));
   rule();
-  // 6. Trans No. + date/time (+ the server reference once synced)
-  push(...lr('Trans No.', r.invoice_number ?? '—', w));
+  // 6. Invoice No. + date/time (+ the server's Transaction No. once synced)
+  push(...lr('Invoice No.', r.invoice_number ?? '—', w));
   push(...lr('Date', r.issued_at_display, w));
-  if (r.sale_reference) push(...lr('Ref', r.sale_reference, w));
+  if (r.sale_reference) push(...lr('Transaction No.', r.sale_reference, w));
   // "Cashier: X · Sold by: Y" (shared receipt-layout; null on an older snapshot without names).
   if (r.staff_line) push(...wrap(r.staff_line, w));
   rule();
   // 7. Title line + messages
   centered(r.title_line);
+  if (r.not_valid_for_input_tax) centered(RECEIPT_NOT_VALID_FOR_INPUT_TAX);
   if (r.message_lines.length > 0) {
     push('');
     r.message_lines.forEach(centered);
@@ -345,7 +368,7 @@ export function receiptTextLines(r: ReceiptData): string[] {
   centered(`TIN: ${dash(pv.tin)}`);
   centered(`BIR Accreditation No.: ${dash(pv.accreditation_no)}`);
   centered(`Issued: ${dash(pv.accreditation_issued)} · Until: ${dash(pv.accreditation_valid_until)}`);
-  centered(`PTU No.: ${dash(pv.ptu_no)}`);
+  centered(`PTU No.: ${dash(pv.ptu_no)} · Date Issued: ${dash(pv.ptu_issued)}`);
   push('');
   centered(pv.validity_note);
   if (r.marks.reprint) push('', center('*** REPRINT ***', w));

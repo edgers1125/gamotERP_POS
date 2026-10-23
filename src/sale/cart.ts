@@ -11,6 +11,7 @@ import { isPhMobile, normalizePhone } from '@shared/phone';
 import type { PosCatalog, PosCatalogItem, PosClient, PosPromo } from '@pos-api/contract';
 import { computeCartTotals, discountInput, hasDiscount, NO_DISCOUNT, type DiscountDraft, type SaleTotals } from './totals';
 import { shownUnitPrice } from '@shared/vat-inclusive';
+import { billingProblem, type BillToDraft } from './billing';
 import { isMoneyText, round2 } from './money';
 import { statutoryClientConflict, statutoryProblem, type StatutoryDraft } from './statutory';
 import {
@@ -81,6 +82,8 @@ export interface CartState {
   txDiscountReason: string;
   statutory: StatutoryDraft | null;
   client: SaleClient;
+  /** "Bill to company" (BIR Phase 1): the buyer company + its withholding, picked on the Payment screen (online only). */
+  billTo: BillToDraft | null;
   soldById: number | null;
   note: string;
   /** One-off message for the cashier (re-pricing, dropped items). */
@@ -102,6 +105,7 @@ export interface CartState {
   setTxDiscount(discount: DiscountDraft, reason: string): void;
   setStatutory(draft: StatutoryDraft | null): void;
   setClient(client: SaleClient): void;
+  setBillTo(billTo: BillToDraft | null): void;
   setSoldBy(userId: number | null): void;
   setNote(note: string): void;
   setNotice(notice: string | null): void;
@@ -167,6 +171,7 @@ const EMPTY = {
   txDiscountReason: '',
   statutory: null,
   client: { kind: 'UNSET' } as SaleClient,
+  billTo: null as BillToDraft | null,
   note: '',
   notice: null,
   stock: {} as Record<number, number>,
@@ -274,6 +279,9 @@ export const useCart = create<CartState>()((set, get) => ({
 
   setClient(client) {
     set({ client });
+  },
+  setBillTo(billTo) {
+    set({ billTo });
   },
   setSoldBy(userId) {
     set({ soldById: userId });
@@ -431,6 +439,8 @@ export function cartProblem(state: CartState, totals: SaleTotals): string | null
     const c = newClientProblem(state.client);
     if (c) return c;
   }
+  const billing = billingProblem(state.billTo, totals);
+  if (billing) return billing;
   if (state.note.trim().length > 500) return 'The note must be 500 characters or fewer.';
   return null;
 }

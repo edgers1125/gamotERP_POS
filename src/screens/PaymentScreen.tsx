@@ -19,6 +19,7 @@ import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
 import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, shownPrice, useCart } from '../sale/cart';
+import { amountDueOf, withholdingFigures } from '../sale/billing';
 import { completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
 import type { SaleStackParamList } from '../sale/navigation';
@@ -26,6 +27,7 @@ import { newPaymentLine, paymentsState, syncAutoLine, type PaymentDraft } from '
 import { statutoryTypeLabel } from '../sale/statutory';
 import { usePosData } from '../sale/usePosData';
 import { ApproverDialog } from '../components/sale/ApproverDialog';
+import { BillToCompany } from '../components/sale/BillToCompany';
 import { PaymentLineCard } from '../components/sale/PaymentLineCard';
 import { TotalsSummary } from '../components/sale/TotalsSummary';
 import { HintText, SectionTitle } from '../components/sale/ui';
@@ -48,7 +50,10 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
   const wide = useWindowDimensions().width >= 720;
 
   const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory]); // eslint-disable-line react-hooks/exhaustive-deps
-  const grandTotal = totals.grandTotal;
+  // "Bill to company" (BIR Phase 1): the buyer withholds part of the total — the payments, tender and change are against
+  // the AMOUNT DUE (grand total − withholding); with no company it IS the grand total.
+  const billing = useMemo(() => withholdingFigures(totals, cart.billTo, cart.pricesIncludeVat), [totals, cart.billTo, cart.pricesIncludeVat]);
+  const grandTotal = amountDueOf(totals, billing);
   const methods = useMemo(() => data.methods.filter((m) => m.pricing_channel_id === cart.channelId), [data.methods, cart.channelId]);
   const channelName = data.channels.find((ch) => ch.id === cart.channelId)?.name ?? '—';
   const pay = paymentsState(lines, methods, grandTotal);
@@ -123,6 +128,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
     <>
       <View style={styles.meta}>
         <Text style={styles.metaText}>Client: {saleClientName(cart) ?? 'Walk-in'}</Text>
+        {cart.billTo ? <Text style={styles.metaText}>Billed to: {cart.billTo.company.name}</Text> : null}
         {cart.statutory ? (
           <Text style={styles.metaText}>
             {statutoryTypeLabel(cart.statutory.type)} ID {cart.statutory.idNumber}
@@ -190,6 +196,12 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
         </View>
 
         <View style={[styles.right, !wide && styles.rightStacked]}>
+          <BillToCompany bill={cart.billTo} figures={billing} online={sync.online} onChange={cart.setBillTo} disabled={busy} />
+          {billing ? (
+            <Text style={styles.withheld}>
+              Total {formatPeso(totals.grandTotal)} − withholding {formatPeso(billing.amounts.amount)}
+            </Text>
+          ) : null}
           <View style={styles.due}>
             <Text style={styles.dueLabel}>Amount due</Text>
             <Text style={styles.dueValue}>{formatPeso(grandTotal)}</Text>
@@ -307,6 +319,7 @@ const useStyles = makeStyles((c, t) => ({
     marginBottom: spacing.lg,
     ...shadow.card,
   },
+  withheld: { ...t.caption, textAlign: 'right', marginBottom: spacing.xs },
   dueLabel: { ...t.heading, color: c.textSecondary },
   dueValue: { ...t.display, fontSize: 40, color: c.primary, fontVariant: ['tabular-nums'] },
   warn: {
