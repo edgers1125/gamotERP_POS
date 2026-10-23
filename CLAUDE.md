@@ -44,7 +44,7 @@ Imported straight from the backend through the aliases in `metro.config.js` / `t
 | `@shared/discount` | `backend/src/lib/discount.ts` | ₱ / % discount → amount |
 | `@shared/business-day` | `backend/src/lib/business-day.ts` | Asia/Manila business date (void same day, refund after) |
 | `@shared/invoice-number` | `backend/src/lib/invoice-number.ts` | `<prefix>-000123` / `<prefix>-RT-000123` |
-| `@shared/receipt-layout` | `backend/src/lib/receipt-layout.ts` | the official receipt's content (`assembleReceipt`, `reconciliationErrors`, `formatReceiptMoney`) — the web's own builder; `ReceiptView` mirrors the web's `SalesReceipt.tsx` |
+| `@shared/receipt-layout` | `backend/src/lib/receipt-layout.ts` | the printed invoice's content (`assembleReceipt`, `reconciliationErrors`, `formatReceiptMoney`) — the web's own builder; `ReceiptView` mirrors the web's `SalesReceipt.tsx` |
 | `@shared/phone` | `backend/src/lib/phone.ts` | THE phone rule: `normalizePhone` (canonical form every number is stored, sent and searched in), `samePhone`, `isPhMobile` |
 | `@shared/promos/promo-math` | `backend/src/lib/promos/promo-math.ts` | THE store-promo price rule: `promoFor` (in force `starts_at ≤ t < ends_at`; two → lower price), `promoUnitPriceCents` (integer centavos, half-up), `compareScPwd`, `describePromoTerms` — see "Store promos" (a sub-folder of `lib/` works through the same `@shared/*` alias; listed in tsconfig `include`) |
 | `@pos-api/contract` | `backend/src/pos-api/contract.ts` | API types, `canonicalJson` (what op signatures cover) |

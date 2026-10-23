@@ -27,7 +27,7 @@ PIN back.
   empty list = no sale can be completed (Charge stays disabled) — a manager adds Sales Staff on the web.
 - **Receipt:** `ReceiptData.staff_line` "Cashier: X · Sold by: Y" (shared `@shared/receipt-layout` `staffLine`), from
   names snapshotted at the sale (`ReceiptSnapshot.cashierName / soldByName`, `checkout.ts`), else today's Sales Staff
-  list; the screen (`ReceiptView`) and the ESC/POS text print it under Trans No. / Date / Ref.
+  list; the screen (`ReceiptView`) and the ESC/POS text print it under Invoice No. / Date / Transaction No.
 - **Auto-lock:** bootstrap `till.idle_lock_minutes` (per COMPANY since 2026-10-08: admin portal › Companies › "Till auto-lock" — was a branch setting under Branches › Manage POS; 0 = off; absent =
   20 — `idleLockMinutesOf`). Locks via `cashierSession.lock()` (exactly the Lock button: the same cashier's PIN resumes an
   online session) after that many minutes without a touch, and when the app has been in the background ≥ 10 s
