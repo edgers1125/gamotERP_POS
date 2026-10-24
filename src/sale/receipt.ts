@@ -67,6 +67,11 @@ const lookedUpBuyers = new Map<number, NonNullable<ReceiptSnapshot['buyer']>>();
 export function rememberBuyer(companyId: number, buyer: NonNullable<ReceiptSnapshot['buyer']>): void {
   lookedUpBuyers.set(companyId, buyer);
 }
+/** The looked-up buyer, keeping the TIN typed at the till when there is one. */
+function lookedUpBuyer(companyId: number, typedTin: string | null | undefined): NonNullable<ReceiptSnapshot['buyer']> | undefined {
+  const b = lookedUpBuyers.get(companyId);
+  return b ? { ...b, tin: typedTin ?? b.tin } : undefined;
+}
 /** True when the sale bills a company but neither its snapshot nor an earlier lookup has the buyer's name. */
 export function needsBuyerLookup(sale: LocalSale): boolean {
   const id = sale.payload.client_company_id;
@@ -185,7 +190,7 @@ export function buildReceipt(
       : null,
     // BIR Phase 1: the buyer + what it withheld come from the signed payload (a reprint of a synced sale prints the same
     // figures); the reprint time is now. Absent fields = a walk-in / individual sale, withholding 0.00.
-    buyer: p.client_company_id != null ? (snap?.buyer ?? lookedUpBuyers.get(p.client_company_id) ?? { name: `Company #${p.client_company_id}`, address: null, tin: p.buyer_tin ?? null }) : null,
+    buyer: p.client_company_id != null ? (snap?.buyer ?? lookedUpBuyer(p.client_company_id, p.buyer_tin) ?? { name: `Company #${p.client_company_id}`, address: null, tin: p.buyer_tin ?? null }) : null,
     withholding: p.withholding
       ? {
           ewtRate: Number(p.withholding.ewt_rate),
