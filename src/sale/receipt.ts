@@ -62,6 +62,17 @@ function remember(clientUuid: string, snapshot: ReceiptSnapshot): void {
   if (snapshots.size > 200) snapshots.delete(snapshots.keys().next().value!);
 }
 
+// Company buyers looked up for a reprint that has no snapshot (client company id → buyer block), memory only.
+const lookedUpBuyers = new Map<number, NonNullable<ReceiptSnapshot['buyer']>>();
+export function rememberBuyer(companyId: number, buyer: NonNullable<ReceiptSnapshot['buyer']>): void {
+  lookedUpBuyers.set(companyId, buyer);
+}
+/** True when the sale bills a company but neither its snapshot nor an earlier lookup has the buyer's name. */
+export function needsBuyerLookup(sale: LocalSale): boolean {
+  const id = sale.payload.client_company_id;
+  return id != null && !receiptSnapshot(sale.client_uuid)?.buyer && !lookedUpBuyers.has(id);
+}
+
 /** Called right after a sale is recorded: kept in memory and saved with the sale (best effort). */
 export function rememberReceiptSnapshot(clientUuid: string, snapshot: ReceiptSnapshot): void {
   remember(clientUuid, snapshot);
@@ -174,7 +185,7 @@ export function buildReceipt(
       : null,
     // BIR Phase 1: the buyer + what it withheld come from the signed payload (a reprint of a synced sale prints the same
     // figures); the reprint time is now. Absent fields = a walk-in / individual sale, withholding 0.00.
-    buyer: p.client_company_id != null ? (snap?.buyer ?? { name: `Company #${p.client_company_id}`, address: null, tin: p.buyer_tin ?? null }) : null,
+    buyer: p.client_company_id != null ? (snap?.buyer ?? lookedUpBuyers.get(p.client_company_id) ?? { name: `Company #${p.client_company_id}`, address: null, tin: p.buyer_tin ?? null }) : null,
     withholding: p.withholding
       ? {
           ewtRate: Number(p.withholding.ewt_rate),

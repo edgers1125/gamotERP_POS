@@ -8,6 +8,7 @@
 import PosDisplay from '../../modules/pos-display';
 import type { PosDisplayCartState, PosDisplayRow, PosDisplayThankYouState } from '../../modules/pos-display';
 import { cartTotals, chargedLineOf, isStatutoryLine, shownPrice, useCart, type CartState, type SaleClient } from '../sale/cart';
+import { amountDueOf, withholdingFigures } from '../sale/billing';
 import { formatPeso, round2 } from '../sale/money';
 import { statutoryTypeLabel } from '../sale/statutory';
 import { displayService } from './displayService';
@@ -67,6 +68,11 @@ function cartState(s: CartState): PosDisplayCartState {
   if (totals.vatExemptSales > 0) rows.push({ label: 'VAT-exempt sales', value: formatPeso(totals.vatExemptSales), tone: 'muted' });
   rows.push({ label: totals.pricesIncludeVat ? 'VAT included (12%)' : 'VAT (12%)', value: formatPeso(totals.totalVat), tone: 'muted' });
 
+  // Bill to company with withholding: the customer pays the AMOUNT DUE (grand total − withholding), as on the Payment screen.
+  const billing = withholdingFigures(totals, s.billTo, s.pricesIncludeVat);
+  const withheld = billing && billing.amounts.amount > 0 ? billing.amounts.amount : 0;
+  if (withheld > 0) rows.push({ label: 'Less: Withholding tax', value: formatPeso(-withheld), tone: 'discount' });
+
   const first = firstName(s.client);
   const count = s.lines.reduce((n, l) => n + l.quantity, 0);
   return {
@@ -74,8 +80,8 @@ function cartState(s: CartState): PosDisplayCartState {
     greeting: first ? `Hi, ${first}!` : null,
     lines,
     totals: rows,
-    grandTotalLabel: 'TOTAL',
-    grandTotal: formatPeso(totals.grandTotal),
+    grandTotalLabel: withheld > 0 ? 'AMOUNT DUE' : 'TOTAL',
+    grandTotal: formatPeso(amountDueOf(totals, billing)),
     payment: payment
       ? [
           { label: 'Cash received', value: formatPeso(payment.tendered) },

@@ -23,7 +23,7 @@ does no maths.
   `outlinedLogo`: white SRC_IN silhouettes stamped around it, ~3 px), name in ivory, accent bar (MedSource green
   #7ab537, or the brand's own secondary) and a thin accent strip down its inner edge (along the bottom when the brand is
   full-screen); RIGHT half = a darker panel (backdrop 30% towards black) with each line (name, qty × unit price, amount,
-  item / Senior-PWD discount), then the same rows as `TotalsSummary` and a "due" box with a large TOTAL in the accent
+  item / Senior-PWD discount), then the same rows as `TotalsSummary` (plus "Less: Withholding tax" when billing a company with withholding — the large box then reads AMOUNT DUE = grand total − withholding instead of TOTAL) and a "due" box with a large TOTAL in the accent
   (+ cash received / change). Contrast is enforced natively (ivory on backdrop ≥ 7:1, muted / accent text ≥ 4.5:1). Figures come only from `cartTotals` (shared pricing). Client = first name only.
   On Payment, cash received + change once the cash line is valid (`customerDisplay.setPayment`).
 - **Sale completed** (Receipt screen, fresh sale only — not reprints/voids): "Thank you" + total/change/receipt no. for

@@ -97,6 +97,8 @@ export interface PosApi {
   clients(search: string): Promise<PosClient[]>;
   /** "Bill to company" (BIR Phase 1): active client companies matching name / code / TIN (online only). */
   clientCompanies(search: string): Promise<PosClientCompany[]>;
+  /** One client company by id, active or not (a reprint with no saved buyer). */
+  clientCompany(id: number): Promise<PosClientCompany>;
   approvers(kind: PosApprovalKind): Promise<PosApprover[]>;
   stock(skuIds: number[]): Promise<PosStockRow[]>;
   sales(date?: string): Promise<PosSaleRow[]>;

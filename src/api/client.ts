@@ -377,6 +377,10 @@ export const api: PosApi = {
     return asArray<PosClientCompany>(res, 'client company');
   },
 
+  async clientCompany(id) {
+    return send<PosClientCompany>({ method: 'GET', path: `/pos/client-companies/${id}`, auth: 'cashier' });
+  },
+
   async approvers(kind: PosApprovalKind) {
     const res = await send<unknown>({ method: 'GET', path: '/pos/approvers', query: { kind }, auth: 'cashier' });
     return asArray<PosApprover>(res, 'approver');

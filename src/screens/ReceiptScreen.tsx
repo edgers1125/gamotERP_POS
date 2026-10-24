@@ -14,7 +14,8 @@ import { printer } from '../printer/printer';
 import { useSyncStatus } from '../sync/syncEngine';
 import { formatPeso } from '../sale/money';
 import type { SaleStackParamList } from '../sale/navigation';
-import { buildReceipt, loadReceiptSnapshot, receiptTextLines } from '../sale/receipt';
+import { buildReceipt, loadReceiptSnapshot, receiptTextLines, rememberBuyer, needsBuyerLookup } from '../sale/receipt';
+import { api } from '../api/client';
 import { receiptLogoUri } from '../sale/receiptAssets';
 import { usePosData } from '../sale/usePosData';
 import { ReceiptView } from '../components/sale/ReceiptView';
@@ -45,6 +46,26 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
     };
   }, [clientUuid, sync.lastSyncAt, sync.pending]);
 
+  // A company sale whose saved receipt has no buyer (no snapshot): look the company up once (online) so the invoice prints
+  // its NAME, not "Company #id". Offline / not found keeps the fallback.
+  const [buyerTick, setBuyerTick] = useState(0);
+  const lookupId = sale && needsBuyerLookup(sale) ? sale.payload.client_company_id! : null;
+  useEffect(() => {
+    if (lookupId === null) return;
+    let live = true;
+    api
+      .clientCompany(lookupId)
+      .then((c) => {
+        if (!live) return;
+        rememberBuyer(c.id, { name: c.name, address: c.address.trim() || null, tin: c.tin });
+        setBuyerTick((n) => n + 1);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [lookupId]);
+
   useEffect(() => {
     printer.isAvailable().then(setPrinterReady).catch(() => setPrinterReady(false));
   }, []);
@@ -62,7 +83,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
 
   const built = useMemo(
     () => (sale ? buildReceipt(sale, data.bootstrap, data.catalog, { logoUri, reprint: reprint || prints > 0 }) : null),
-    [sale, data.bootstrap, data.catalog, logoUri, reprint, prints],
+    [sale, data.bootstrap, data.catalog, logoUri, reprint, prints, buyerTick],
   );
   const receipt = built?.data ?? null;
   // Like the web (which refuses to render one), a receipt that doesn't add up is never printed.
@@ -73,7 +94,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
   useEffect(() => {
     if (!receipt || !sale || reprint || sale.voided || thanked.current) return;
     thanked.current = true;
-    customerDisplay.showThankYou({ total: receipt.total, change: receipt.change, invoiceNumber: receipt.invoice_number ?? '' });
+    customerDisplay.showThankYou({ total: receipt.amount_due, change: receipt.change, invoiceNumber: receipt.invoice_number ?? '' });
   }, [receipt, sale, reprint]);
 
   // Print once automatically on a fresh sale when a printer is there.
