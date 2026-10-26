@@ -31,7 +31,8 @@ import {
   useAttendanceKiosk,
   type LocalPunch,
 } from '../attendance/attendanceKiosk';
-import { allowedKindsFor, DEFAULT_CAPTURE, PUNCH_KIND_LABEL, punchKindsFor, punchMessage, suggestedAmong, workStatusOf } from '../attendance/punch';
+import { allowedKindsFor, DEFAULT_CAPTURE, PUNCH_KIND_LABEL, punchKindsFor, punchMessage, punchRuleNow, suggestedAmong, workStatusOf } from '../attendance/punch';
+import { serverClock } from '../device/serverClock';
 import { LivenessCapture, type LivenessOutcome } from '../components/attendance/LivenessCapture';
 import { PIN_MIN, PinPad } from '../components/attendance/PinPad';
 import { errorMessage, formatDateTime } from '../components/shell/format';
@@ -339,7 +340,7 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
             {notReady(item) ? (
               <Text style={styles.personNotReady}>Ask HR: no {missingText(item.missing)}</Text>
             ) : (
-              <Text style={styles.personHint}>{workStatusOf(item, Date.now()) || ' '}</Text>
+              <Text style={styles.personHint}>{workStatusOf(item, punchRuleNow(Date.now(), serverClock.offsetMsSync())) || ' '}</Text>
             )}
           </Pressable>
         )}
@@ -359,7 +360,8 @@ function KindStep({ emp: stageEmp, notice, online, onChoose, onBack }: { emp: Em
   // The live cache entry (a list re-read after a refused punch, or this tablet's own punches, change what is allowed).
   const emp = useAttendanceKiosk((s) => s.employees.find((e) => e.user_id === stageEmp.user_id)) ?? stageEmp;
   // Punch ORDER (punch.ts): only the kinds that may come next. An older server sends no punch_state → every kind, as before.
-  const allowed = allowedKindsFor(emp, Date.now()) ?? punchKindsFor(emp);
+  // Judged on the server-corrected clock the punch is stamped with (never the raw device clock).
+  const allowed = allowedKindsFor(emp, punchRuleNow(Date.now(), serverClock.offsetMsSync())) ?? punchKindsFor(emp);
   const suggested = suggestedAmong(emp, allowed);
   const others = allowed.filter((k) => k !== suggested);
   // Not set up (PIN and/or reference photo — readiness, known offline too from the cached list); online, a missing PIN.

@@ -58,7 +58,7 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   REJECTED. `attendance_punches.kind` CHECK widened by local migration v5. **Release: backend first** — against an older server (no
   `last_kind` / `multi_branch`, IN/OUT-only schema) the break buttons still show but the PIN step refuses a break punch
   (400, shown) and an OFFLINE break punch comes back REJECTED at upload (400, kept as "Not accepted"); IN/OUT keep working. Older apps (≤ 1.2.0) against the new server: unchanged (IN/OUT only).
-- **Punch ORDER** (app 1.4.x, branch `feature/attendance-punch-order`; server: GamotERP `docs/plans/attendance-punch-order.md`, `lib/attendance/punch-order.ts` = THE rule, mirrored ONCE in `punch.ts` `allowedKindsAfter`):
+- **Punch ORDER** (app 1.4.x, branch `feature/attendance-punch-order`; server: GamotERP `docs/plans/attendance-punch-order.md`, `lib/attendance/punch-order.ts` = THE rule, mirrored ONCE in `punch.ts` `allowedKindsAfter`; judged at `punchRuleNow(Date.now(), serverClock.offsetMsSync())` = the SAME server-corrected clock the punch is stamped with (`serverClock.nowMs()`), never the raw device clock — a tablet with a wrong date gets the server's buttons; self-test "clock:" cases):
   OFF (none / OUT / last punch older than 16 h) → IN only; WORKING (IN / BREAK_IN / TRANSPORT_IN) → OUT, BREAK_OUT,
   TRANSPORT_OUT (multi-branch only); ON_BREAK → BREAK_IN only; IN_TRANSPORT → TRANSPORT_IN only. The kiosk's kind step
   shows ONLY the allowed buttons (`allowedKindsFor`; big button = `suggestedAmong`). "Last known state" = the employee's

@@ -17,6 +17,7 @@ import {
   afterPunch,
   allowedKindsAfter,
   allowedKindsFor,
+  punchRuleNow,
   punchStateAfter,
   suggestedAmong,
   withLocalPunches,
@@ -366,6 +367,17 @@ const base: BuildPunchInput = {
   check('night shift: after the 6 AM OUT → IN only', allowedKindsAfter('OUT', '2026-10-26T22:00:00.000Z', '2026-10-27T00:00:00.000Z', false).join() === 'IN');
   // Split shift: IN, OUT, IN again the same day is fine.
   check('split shift: OUT at noon then IN at 1 PM is allowed', allowedKindsAfter('OUT', '2026-10-26T04:00:00.000Z', '2026-10-26T05:00:00.000Z', false).join() === 'IN');
+  // Device clock off by a day: the rule runs on the SERVER-corrected clock (wall + learned offset, the clock the punch is
+  // stamped with), so the buttons match what the server would allow — never auto-closed / kept open by a wrong date.
+  {
+    const serverNow = at(2).getTime(); // IN 2 h ago on the server's clock → still working
+    const DAY = 86_400_000;
+    const ahead = punchRuleNow(serverNow + DAY, -DAY); // tablet a day ahead, offset learned
+    check('clock: device a day AHEAD → same buttons as the server (still working, not auto-closed)', allowedKindsAfter('IN', T0, ahead, false).join() === allowedKindsAfter('IN', T0, serverNow, false).join() && allowedKindsAfter('IN', T0, ahead, false).join() === 'OUT,BREAK_OUT');
+    check('clock: raw device time a day ahead would have auto-closed it (why the offset matters)', allowedKindsAfter('IN', T0, serverNow + DAY, false).join() === 'IN');
+    const lateNow = at(20).getTime(); // 20 h after IN on the server → closed
+    check('clock: device a day BEHIND → same buttons as the server (closed after 16 h, not kept open)', allowedKindsAfter('IN', T0, punchRuleNow(lateNow - DAY, DAY), false).join() === allowedKindsAfter('IN', T0, lateNow, false).join() && allowedKindsAfter('IN', T0, punchRuleNow(lateNow - DAY, DAY), false).join() === 'IN');
+  }
   check('state fields: ON_BREAK has since / last_kind / allowed', (() => { const st = punchStateAfter('BREAK_OUT', T0, at(1), true); return st.state === 'ON_BREAK' && st.last_kind === 'BREAK_OUT' && st.since === T0 && st.allowed_kinds.join() === 'BREAK_IN'; })());
 
   // The kiosk's view of one employee: the cached punch_state re-judged at "now"; local punches newer than the sync.

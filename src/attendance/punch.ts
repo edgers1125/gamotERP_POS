@@ -128,6 +128,11 @@ export function punchStateAfter(
 
 type OrderInfo = KindInfo & { punch_state?: PosPunchState };
 
+/** The "now" the punch ORDER is judged at: the device wall clock corrected by the learned server offset — the SAME clock
+ * the punch itself is stamped with (attendanceKiosk.ts serverClock.nowMs()), never the raw device clock, so a tablet
+ * whose date is wrong neither auto-closes a shift nor keeps one open past the 16 h limit. */
+export const punchRuleNow = (deviceWallMs: number, serverOffsetMs: number): number => deviceWallMs + serverOffsetMs;
+
 /**
  * The punch buttons to show now. The employee's cached `punch_state` (the server's, or advanced by this tablet's own
  * punches) is re-judged with the local rule at `now`, so a shift open > the limit offers IN again offline. No
