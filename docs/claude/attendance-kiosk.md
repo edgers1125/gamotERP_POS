@@ -49,7 +49,7 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   doesn't block re-enroll — its confirmation states the count (`unsentPunchCount`) and what happens.
 - **Punch kinds** (app 1.3.0, user "go build" 2026-10-22; GamotERP `lib/attendance/countable.ts` = THE rule, mirrored in
   `punch.ts` because that file imports Prisma): Time in / Time out, **Start break / End break** (lunch, everyone — not
-  counted) and **Leave for other branch / Arrive at branch** (travel between branches, counted) ONLY for `multi_branch` employees
+  counted) and **Transport Start / Transport End** (travel between branches, counted) ONLY for `multi_branch` employees
   (`punchKindsFor`; absent = false). Suggested (big button) = `suggestedKindOf`: BREAK_IN after BREAK_OUT, TRANSPORT_IN
   after TRANSPORT_OUT (multi-branch), else the server's `suggested_kind`; every other allowed kind is a smaller button
   below. After a punch the cached entry follows (`afterPunch`: `last_kind` = the punch, `suggested_kind` OUT when still on
