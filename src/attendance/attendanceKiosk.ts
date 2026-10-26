@@ -47,6 +47,7 @@ import {
   punchPayloadText,
   randomIntFromBytes,
   storedPunchProblem,
+  withLocalPunches,
   type BuildPunchInput,
   type QueuedFrame,
 } from './punch';
@@ -288,7 +289,7 @@ export function recordPunch(input: RecordPunchInput): Promise<LocalPunch> {
         );
       }),
     );
-    await flipSuggestion(input.employee.user_id, input.kind).catch(() => undefined);
+    await flipSuggestion(input.employee.user_id, input.kind, payload.device_time).catch(() => undefined);
     await refreshCounts();
     emitLocalStoreEvent('enqueued'); // the sync engine runs a cycle now (it pushes punches too)
     return {
@@ -307,11 +308,11 @@ export function recordPunch(input: RecordPunchInput): Promise<LocalPunch> {
 }
 
 /** After a punch: the cached last kind + suggestion for that person (punch.ts afterPunch) until the server's list says otherwise. */
-async function flipSuggestion(userId: number, kind: PosPunchKind): Promise<void> {
+async function flipSuggestion(userId: number, kind: PosPunchKind, at: string): Promise<void> {
   const s = useAttendanceKiosk.getState();
   const deviceId = await currentDeviceId();
   if (deviceId === null || s.mode !== 'ON') return;
-  const employees = s.employees.map((e) => (e.user_id === userId ? afterPunch(e, kind) : e));
+  const employees = s.employees.map((e) => (e.user_id === userId ? afterPunch(e, kind, at) : e));
   await saveCache(deviceId, { enabled: true, reason: null, kiosk: s.kiosk, employees });
 }
 
@@ -320,6 +321,19 @@ export { isLivenessRefusal };
 export async function getPunch(clientUuid: string): Promise<LocalPunch | null> {
   const r = await withDb(async (conn) => rows(await conn.execute('SELECT * FROM attendance_punches WHERE client_uuid = ?', [clientUuid]))[0]);
   return r ? punchFromRow(r) : null;
+}
+
+/** Punches still waiting to upload, per employee — newer than any server list that doesn't have them yet. */
+async function pendingPunchesByUser(): Promise<Map<number, { kind: PosPunchKind; deviceTime: string }[]>> {
+  const out = new Map<number, { kind: PosPunchKind; deviceTime: string }[]>();
+  const r = await withDb(async (conn) => rows(await conn.execute("SELECT user_id, kind, device_time FROM attendance_punches WHERE status = 'PENDING' ORDER BY seq")));
+  for (const x of r) {
+    const id = Number(x.user_id);
+    const list = out.get(id) ?? [];
+    list.push({ kind: x.kind as PosPunchKind, deviceTime: String(x.device_time) });
+    out.set(id, list);
+  }
+  return out;
 }
 
 /** Punches the server refused (newest first) — shown on the kiosk for a manager. */
@@ -606,7 +620,10 @@ export function refreshKiosk(opts?: { force?: boolean }): Promise<void> {
     try {
       const kiosk = await attendanceApi.kiosk();
       const list = await attendanceApi.employees();
-      await saveCache(deviceId, { enabled: true, reason: null, kiosk: { ...kiosk, employees_version: list.version }, employees: list.items });
+      // The list is the server's view; punches taken here and not yet uploaded are newer — keep them in the punch order.
+      const pending = await pendingPunchesByUser().catch(() => new Map<number, { kind: PosPunchKind; deviceTime: string }[]>());
+      const items = list.items.map((e) => (pending.has(e.user_id) ? withLocalPunches(e, pending.get(e.user_id)!) : e));
+      await saveCache(deviceId, { enabled: true, reason: null, kiosk: { ...kiosk, employees_version: list.version }, employees: items });
       kioskOffRetryAt = 0; // a kiosk again: waiting punches go out on the next cycle
     } catch (e) {
       const err = asApiError(e);

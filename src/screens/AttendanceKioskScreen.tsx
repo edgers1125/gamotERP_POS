@@ -31,7 +31,7 @@ import {
   useAttendanceKiosk,
   type LocalPunch,
 } from '../attendance/attendanceKiosk';
-import { DEFAULT_CAPTURE, PUNCH_KIND_LABEL, punchKindsFor, punchMessage, suggestedKindOf, workStatusOf } from '../attendance/punch';
+import { allowedKindsFor, DEFAULT_CAPTURE, PUNCH_KIND_LABEL, punchKindsFor, punchMessage, suggestedAmong, workStatusOf } from '../attendance/punch';
 import { LivenessCapture, type LivenessOutcome } from '../components/attendance/LivenessCapture';
 import { PIN_MIN, PinPad } from '../components/attendance/PinPad';
 import { errorMessage, formatDateTime } from '../components/shell/format';
@@ -46,7 +46,7 @@ type Employee = PosAttendanceEmployee;
 
 type Stage =
   | { k: 'grid' }
-  | { k: 'kind'; emp: Employee }
+  | { k: 'kind'; emp: Employee; notice?: string }
   | { k: 'pin'; emp: Employee; kind: Kind }
   | { k: 'camera'; emp: Employee; kind: Kind; ticket: { ticket: string; steps: AttendanceLivenessStep[] } | null; steps: AttendanceLivenessStep[]; note: string | null }
   | { k: 'saving'; emp: Employee; kind: Kind }
@@ -229,7 +229,7 @@ export function AttendanceKioskScreen() {
         {stage.k === 'grid' ? <EmployeeGrid disabled={!!blocked} onPick={(emp) => { touch(); setStage({ k: 'kind', emp }); }} /> : null}
 
         {stage.k === 'kind' ? (
-          <KindStep emp={stage.emp} online={online} onChoose={(kind) => chooseKind(stage.emp, kind)} onBack={goGrid} />
+          <KindStep emp={stage.emp} notice={stage.notice} online={online} onChoose={(kind) => chooseKind(stage.emp, kind)} onBack={goGrid} />
         ) : null}
 
         {stage.k === 'pin' ? (
@@ -241,6 +241,7 @@ export function AttendanceKioskScreen() {
             onTicket={(t) => startCamera(stage.emp, stage.kind, { ticket: t.ticket, steps: t.challenge.steps }, null)}
             onOffline={() => startCamera(stage.emp, stage.kind, null, 'No connection — your PIN couldn’t be checked. HR will review this punch.')}
             onLocked={onLocked}
+            onOutOfOrder={(message) => setStage({ k: 'kind', emp: stage.emp, notice: message })}
           />
         ) : null}
 
@@ -338,7 +339,7 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
             {notReady(item) ? (
               <Text style={styles.personNotReady}>Ask HR: no {missingText(item.missing)}</Text>
             ) : (
-              <Text style={styles.personHint}>{workStatusOf(item) || ' '}</Text>
+              <Text style={styles.personHint}>{workStatusOf(item, Date.now()) || ' '}</Text>
             )}
           </Pressable>
         )}
@@ -353,10 +354,14 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
 // Like the web kiosk: the suggested kind big (back from the break after a break start, arrived after a transport start, else
 // the server's IN / OUT — punch.ts suggestedKindOf), every other kind this person may punch below it (break for
 // everyone, transport only when stationed at 2+ branches — punchKindsFor).
-function KindStep({ emp, online, onChoose, onBack }: { emp: Employee; online: boolean; onChoose: (k: Kind) => void; onBack: () => void }) {
+function KindStep({ emp: stageEmp, notice, online, onChoose, onBack }: { emp: Employee; notice?: string; online: boolean; onChoose: (k: Kind) => void; onBack: () => void }) {
   const styles = useStyles();
-  const suggested = suggestedKindOf(emp);
-  const others = punchKindsFor(emp).filter((k) => k !== suggested);
+  // The live cache entry (a list re-read after a refused punch, or this tablet's own punches, change what is allowed).
+  const emp = useAttendanceKiosk((s) => s.employees.find((e) => e.user_id === stageEmp.user_id)) ?? stageEmp;
+  // Punch ORDER (punch.ts): only the kinds that may come next. An older server sends no punch_state → every kind, as before.
+  const allowed = allowedKindsFor(emp, Date.now()) ?? punchKindsFor(emp);
+  const suggested = suggestedAmong(emp, allowed);
+  const others = allowed.filter((k) => k !== suggested);
   // Not set up (PIN and/or reference photo — readiness, known offline too from the cached list); online, a missing PIN.
   const unready = notReady(emp) || (online && !emp.pin_set);
   return (
@@ -365,6 +370,7 @@ function KindStep({ emp, online, onChoose, onBack }: { emp: Employee; online: bo
         <Text style={styles.initialsBigText}>{emp.initials}</Text>
       </View>
       <Text style={styles.big}>{emp.display_name}</Text>
+      {notice ? <Banner kind="warning" message={notice} style={styles.inlineBanner} /> : null}
       {unready ? (
         <Banner
           kind="warning"
@@ -404,6 +410,7 @@ function PinStep({
   onTicket,
   onOffline,
   onLocked,
+  onOutOfOrder,
 }: {
   emp: Employee;
   kind: Kind;
@@ -414,6 +421,8 @@ function PinStep({
   onOffline: () => void;
   /** 403 SUBSCRIPTION_LOCKED — no punch; the kiosk pauses. */
   onLocked: () => void;
+  /** 409 PUNCH_OUT_OF_ORDER — back to the kind step with the server's message (the state is re-read). */
+  onOutOfOrder: (message: string) => void;
 }) {
   const styles = useStyles();
   const [pin, setPin] = useState('');
@@ -437,6 +446,13 @@ function PinStep({
       // Only a genuine network failure (no answer — ApiError status 0) continues offline; any other answer is shown.
       if (apiStatus(e) === 0) {
         onOffline();
+        return;
+      }
+      // Out of order (409 PUNCH_OUT_OF_ORDER — another device punched meanwhile, or the list was stale): the server's
+      // message, the list re-read, and the kind step shows only what is allowed now.
+      if (apiStatus(e) === 409 && (e as { code?: unknown } | null)?.code === 'PUNCH_OUT_OF_ORDER') {
+        const message = errorMessage(e, 'That punch does not fit your last punch.');
+        void refreshKiosk({ force: true }).finally(() => onOutOfOrder(message));
         return;
       }
       // Not set up (409 NOT_SET_UP — HR removed the PIN / reference photo since the list was read): say what's missing.

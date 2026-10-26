@@ -4,7 +4,8 @@
 //   * src/attendance/punch.ts — device challenges, the payload the server's posPunchPayloadSchema accepts, the signed
 //     canonical text, the queue row's frames column (serialisation round trip + tamper detection), the upload parts and
 //     the confirmation wording; punch kinds (break / transport — which buttons, the suggestion, the offline flip) and the
-//     online face-check refusal that is discarded.
+//     online face-check refusal that is discarded; the punch ORDER (which buttons may come next, the 16 h rule, local
+//     punches newer than the synced state).
 //
 // Run from the app root (the repo has no test runner; tsx resolves the @pos-api alias from tsconfig.json):
 //   ../GamotERP/apps/pharma/backend/node_modules/.bin/tsx --tsconfig ./tsconfig.json scripts/attendance-selftest.ts
@@ -14,6 +15,11 @@ import { canonicalJson, type AttendanceLivenessStep, type PosAttendancePunchPayl
 import { DEFAULT_TUNING, LivenessRun, OWN_LEFT_YAW_SIGN, type FaceSampleLike } from '../src/attendance/liveness';
 import {
   afterPunch,
+  allowedKindsAfter,
+  allowedKindsFor,
+  punchStateAfter,
+  suggestedAmong,
+  withLocalPunches,
   buildPunchPayload,
   deviceChallenge,
   discardsRefusal,
@@ -328,6 +334,75 @@ const base: BuildPunchInput = {
   check('grid: at work', workStatusOf({ ...single, suggested_kind: 'OUT', last_kind: 'BREAK_IN' }) === 'At work');
   check('grid: travelling (multi)', workStatusOf({ ...multi, suggested_kind: 'OUT', last_kind: 'TRANSPORT_OUT' }) === 'Travelling');
   check('grid: off', workStatusOf({ ...single, last_kind: 'OUT' }) === '');
+}
+
+// ---- punch ORDER: what may come next (mirror of the server's lib/attendance/punch-order.ts) ----------------------------
+
+{
+  const T0 = '2026-10-26T00:00:00.000Z';
+  const at = (h: number) => new Date(Date.parse(T0) + h * 3_600_000);
+  const after = (k: string | null, multi = false, now = 1) => allowedKindsAfter(k as never, k ? T0 : null, at(now), multi).join();
+  check('order: never punched → IN only', after(null) === 'IN', after(null));
+  check('order: after OUT → IN only', after('OUT') === 'IN');
+  check('order: after IN → OUT, BREAK_OUT (single-branch)', after('IN') === 'OUT,BREAK_OUT', after('IN'));
+  check('order: after IN (multi) → + TRANSPORT_OUT', after('IN', true) === 'OUT,BREAK_OUT,TRANSPORT_OUT');
+  check('order: after BREAK_OUT → BREAK_IN only', after('BREAK_OUT', true) === 'BREAK_IN');
+  check('order: after BREAK_IN → working again', after('BREAK_IN') === 'OUT,BREAK_OUT');
+  check('order: after TRANSPORT_OUT (multi) → TRANSPORT_IN only', after('TRANSPORT_OUT', true) === 'TRANSPORT_IN');
+  check('order: after TRANSPORT_IN → working again', after('TRANSPORT_IN', true) === 'OUT,BREAK_OUT,TRANSPORT_OUT');
+  check('order: stale TRANSPORT_OUT on a single-branch employee → plain working', after('TRANSPORT_OUT', false) === 'OUT,BREAK_OUT');
+  check('order: transport never offered to a single-branch employee', ['IN', 'BREAK_OUT', 'BREAK_IN', 'TRANSPORT_OUT', 'TRANSPORT_IN', 'OUT', null].every((k) => !after(k, false).includes('TRANSPORT')));
+  // 16 h rule: strictly older than the limit is closed (OFF → IN); exactly 16 h is still open.
+  check('16 h: open 15.9 h → still working', after('IN', false, 15.9) === 'OUT,BREAK_OUT');
+  check('16 h: open exactly 16 h → still working', after('IN', false, 16) === 'OUT,BREAK_OUT');
+  check('16 h: open 16.1 h → closed, IN only', after('IN', false, 16.1) === 'IN');
+  check('16 h: forgotten BREAK_OUT 20 h ago → IN only', after('BREAK_OUT', false, 20) === 'IN');
+  check('16 h: forgotten TRANSPORT_OUT 20 h ago → IN only', after('TRANSPORT_OUT', true, 20) === 'IN');
+  check('16 h: missing_time_out is reported', punchStateAfter('IN', T0, at(20), false).missing_time_out === true && punchStateAfter('IN', T0, at(2), false).missing_time_out === false);
+  check('16 h: a custom limit (12 h) is honoured', allowedKindsAfter('IN', T0, at(13), false, 12).join() === 'IN');
+  // Night shift across midnight (Manila): IN 10 PM, OUT 6 AM = 8 h — OUT is allowed, there is no calendar-day rule.
+  const night = '2026-10-26T14:00:00.000Z'; // 10:00 PM Manila
+  check('night shift: IN 10 PM → at 6 AM next day OUT is still allowed', allowedKindsAfter('IN', night, '2026-10-26T22:00:00.000Z', false).includes('OUT'));
+  check('night shift: after the 6 AM OUT → IN only', allowedKindsAfter('OUT', '2026-10-26T22:00:00.000Z', '2026-10-27T00:00:00.000Z', false).join() === 'IN');
+  // Split shift: IN, OUT, IN again the same day is fine.
+  check('split shift: OUT at noon then IN at 1 PM is allowed', allowedKindsAfter('OUT', '2026-10-26T04:00:00.000Z', '2026-10-26T05:00:00.000Z', false).join() === 'IN');
+  check('state fields: ON_BREAK has since / last_kind / allowed', (() => { const st = punchStateAfter('BREAK_OUT', T0, at(1), true); return st.state === 'ON_BREAK' && st.last_kind === 'BREAK_OUT' && st.since === T0 && st.allowed_kinds.join() === 'BREAK_IN'; })());
+
+  // The kiosk's view of one employee: the cached punch_state re-judged at "now"; local punches newer than the sync.
+  const emp = (kind: string | null, since: string | null, multi = false) => ({
+    suggested_kind: 'IN' as const,
+    last_kind: null,
+    multi_branch: multi,
+    punch_state: punchStateAfter(kind as never, since, at(1), multi),
+  });
+  check('older server (no punch_state) → null = every kind as today', allowedKindsFor({ suggested_kind: 'IN', multi_branch: true }, at(1)) === null);
+  check('cached state is re-judged offline (IN 20 h ago → IN offered again)', allowedKindsFor(emp('IN', T0), at(20))!.join() === 'IN');
+  check('cached state OFF → IN only', allowedKindsFor(emp(null, null), at(1))!.join() === 'IN');
+  check('big button: OFF → IN', suggestedAmong({ suggested_kind: 'IN' }, ['IN']) === 'IN');
+  check('big button: working → OUT', suggestedAmong({ suggested_kind: 'OUT' }, ['OUT', 'BREAK_OUT']) === 'OUT');
+  check('big button: stale suggested IN while working → OUT', suggestedAmong({ suggested_kind: 'IN' }, ['OUT', 'BREAK_OUT']) === 'OUT');
+  check('big button: on break → BREAK_IN', suggestedAmong({ suggested_kind: 'OUT', last_kind: 'BREAK_OUT' }, ['BREAK_IN']) === 'BREAK_IN');
+
+  // Local queue newer than the synced state.
+  const synced = emp('OUT', T0);
+  const t = (h: number) => at(h).toISOString();
+  const withIn = withLocalPunches(synced, [{ kind: 'IN', deviceTime: t(2) }]);
+  check('local IN after a synced OUT → working', allowedKindsFor(withIn, at(3))!.join() === 'OUT,BREAK_OUT', allowedKindsFor(withIn, at(3)));
+  const chain = withLocalPunches(synced, [
+    { kind: 'BREAK_OUT', deviceTime: t(4) },
+    { kind: 'IN', deviceTime: t(2) },
+  ]);
+  check('local punches apply oldest first (given out of order)', allowedKindsFor(chain, at(5))!.join() === 'BREAK_IN');
+  const already = withLocalPunches(emp('IN', t(3)), [{ kind: 'IN', deviceTime: t(2) }]);
+  check('a local punch OLDER than the synced state is ignored', already.punch_state!.since === t(3) && already.punch_state!.last_kind === 'IN');
+  const fresh = withLocalPunches(emp('BREAK_OUT', t(3)), [{ kind: 'IN', deviceTime: t(2) }]);
+  check('server state newer than the local punch wins', allowedKindsFor(fresh, at(4))!.join() === 'BREAK_IN');
+  const none = withLocalPunches(synced, []);
+  check('no local punches → unchanged', JSON.stringify(none) === JSON.stringify(synced));
+  const old = withLocalPunches({ suggested_kind: 'IN' as const, last_kind: null, multi_branch: false }, [{ kind: 'IN', deviceTime: t(2) }]);
+  check('older server: local punch updates last_kind but adds no punch_state', old.last_kind === 'IN' && !('punch_state' in old && old.punch_state));
+  const af = afterPunch(synced, 'IN', t(2));
+  check('afterPunch keeps punch_state in step', af.punch_state!.state === 'WORKING' && af.punch_state!.since === t(2) && af.last_kind === 'IN');
 }
 
 // ---- queue row: frames column + tamper detection -----------------------------------------------------------------

@@ -14,6 +14,7 @@ import {
   type PosAttendanceEmployee,
   type PosAttendancePunchPayload,
   type PosPunchKind,
+  type PosPunchState,
 } from '@pos-api/contract';
 
 export const LIVENESS_STEPS: readonly AttendanceLivenessStep[] = ['BLINK', 'TURN_LEFT', 'TURN_RIGHT'];
@@ -52,13 +53,127 @@ export function suggestedKindOf(e: KindInfo): PosPunchKind {
   return e.suggested_kind === 'OUT' ? 'OUT' : 'IN';
 }
 
-/** The cached entry after a punch on this tablet (offline too) — until the server's next list says otherwise. */
-export function afterPunch<E extends KindInfo>(e: E, kind: PosPunchKind): E {
-  return { ...e, last_kind: kind, suggested_kind: onTheClockAfter(kind) ? 'OUT' : 'IN' };
+// ---- punch ORDER (GamotERP lib/attendance/punch-order.ts — THE rule; mirrored here, one table) --------------------------
+//   OFF (none / OUT / last punch older than the open-shift limit) → IN only
+//   WORKING (IN, BREAK_IN, TRANSPORT_IN) → BREAK_OUT, TRANSPORT_OUT (multi-branch only), OUT
+//   ON_BREAK (BREAK_OUT) → BREAK_IN only;  IN_TRANSPORT (TRANSPORT_OUT) → TRANSPORT_IN only (multi-branch).
+// The server never refuses an UPLOAD for the order (it flags it), so a punch taken offline is always uploaded.
+
+/** The server's `open_shift_limit_hours` (16) until a list says otherwise. */
+export const DEFAULT_OPEN_SHIFT_LIMIT_HOURS = 16;
+
+export type PunchOrderState = PosPunchState['state'];
+
+const toMs = (t: Date | string | number): number => (t instanceof Date ? t.getTime() : typeof t === 'number' ? t : Date.parse(t));
+
+/** Where the person stands after `lastKind` at `lastAt`, judged at `now`. A shift open longer than the limit counts as closed (OFF). */
+export function punchOrderStateAfter(
+  lastKind: PosPunchKind | null | undefined,
+  lastAt: Date | string | null | undefined,
+  now: Date | string | number,
+  multiBranch: boolean,
+  openShiftLimitHours: number = DEFAULT_OPEN_SHIFT_LIMIT_HOURS,
+): { state: PunchOrderState; missingTimeOut: boolean } {
+  if (!lastKind || lastAt === null || lastAt === undefined) return { state: 'OFF', missingTimeOut: false };
+  const open: PunchOrderState =
+    lastKind === 'BREAK_OUT' ? 'ON_BREAK' : lastKind === 'TRANSPORT_OUT' ? (multiBranch ? 'IN_TRANSPORT' : 'WORKING') : lastKind === 'OUT' ? 'OFF' : 'WORKING';
+  if (open === 'OFF') return { state: 'OFF', missingTimeOut: false };
+  const at = toMs(lastAt);
+  if (!Number.isNaN(at) && toMs(now) - at > openShiftLimitHours * 3_600_000) return { state: 'OFF', missingTimeOut: true };
+  return { state: open, missingTimeOut: false };
 }
 
-/** The grid's status line under a name ('' = nothing to say). */
-export function workStatusOf(e: KindInfo): string {
+/** The kinds that may be punched next (OUT first = the big button). Transport only for a multi-branch employee. */
+export function allowedKindsOf(state: PunchOrderState, multiBranch: boolean): PosPunchKind[] {
+  switch (state) {
+    case 'OFF':
+      return ['IN'];
+    case 'WORKING':
+      return multiBranch ? ['OUT', 'BREAK_OUT', 'TRANSPORT_OUT'] : ['OUT', 'BREAK_OUT'];
+    case 'ON_BREAK':
+      return ['BREAK_IN'];
+    case 'IN_TRANSPORT':
+      return ['TRANSPORT_IN'];
+  }
+}
+
+/** THE local rule: what may come after `lastKind` (at `lastAt`) when it is `now`. */
+export function allowedKindsAfter(
+  lastKind: PosPunchKind | null | undefined,
+  lastAt: Date | string | null | undefined,
+  now: Date | string | number,
+  multiBranch: boolean,
+  openShiftLimitHours: number = DEFAULT_OPEN_SHIFT_LIMIT_HOURS,
+): PosPunchKind[] {
+  return allowedKindsOf(punchOrderStateAfter(lastKind, lastAt, now, multiBranch, openShiftLimitHours).state, multiBranch);
+}
+
+/** A whole PosPunchState from the last punch (what the cache keeps for an employee after a punch on this tablet). */
+export function punchStateAfter(
+  lastKind: PosPunchKind | null,
+  lastAt: Date | string | null,
+  now: Date | string | number,
+  multiBranch: boolean,
+  openShiftLimitHours: number = DEFAULT_OPEN_SHIFT_LIMIT_HOURS,
+): PosPunchState {
+  const { state, missingTimeOut } = punchOrderStateAfter(lastKind, lastAt, now, multiBranch, openShiftLimitHours);
+  return {
+    state,
+    allowed_kinds: allowedKindsOf(state, multiBranch),
+    since: lastAt === null ? null : new Date(toMs(lastAt)).toISOString(),
+    last_kind: lastKind,
+    missing_time_out: missingTimeOut,
+  };
+}
+
+type OrderInfo = KindInfo & { punch_state?: PosPunchState };
+
+/**
+ * The punch buttons to show now. The employee's cached `punch_state` (the server's, or advanced by this tablet's own
+ * punches) is re-judged with the local rule at `now`, so a shift open > the limit offers IN again offline. No
+ * `punch_state` (older server) → null: the caller falls back to every kind as before.
+ */
+export function allowedKindsFor(e: OrderInfo, now: Date | string | number, openShiftLimitHours: number = DEFAULT_OPEN_SHIFT_LIMIT_HOURS): PosPunchKind[] | null {
+  const ps = e.punch_state;
+  if (!ps) return null;
+  return allowedKindsAfter(ps.last_kind, ps.since, now, e.multi_branch === true, openShiftLimitHours);
+}
+
+/** The big button among the allowed kinds: the usual suggestion when it is allowed, else OUT, else the first allowed. */
+export function suggestedAmong(e: KindInfo, allowed: readonly PosPunchKind[]): PosPunchKind {
+  const s = suggestedKindOf(e);
+  if (allowed.includes(s)) return s;
+  return allowed.includes('OUT') ? 'OUT' : allowed[0] ?? s;
+}
+
+/** The cached entry after a punch on this tablet (offline too) — until the server's next list says otherwise. */
+export function afterPunch<E extends OrderInfo>(e: E, kind: PosPunchKind, at: Date | string = new Date()): E {
+  const next: E = { ...e, last_kind: kind, suggested_kind: onTheClockAfter(kind) ? 'OUT' : 'IN' };
+  // Only an entry that carries the server's punch order (a newer server) gets one; an older server's stays without.
+  if (e.punch_state) next.punch_state = punchStateAfter(kind, at, toMs(at), e.multi_branch === true);
+  return next;
+}
+
+/**
+ * The server's entry advanced by this tablet's own punches the list may not know yet (still unsent): every local punch
+ * NEWER than the entry's `since` is applied, oldest first. A punch the server already has is not newer, so it is skipped.
+ */
+export function withLocalPunches<E extends OrderInfo>(e: E, local: readonly { kind: PosPunchKind; deviceTime: string }[]): E {
+  const ps = e.punch_state;
+  const sinceMs = ps ? (ps.since ? toMs(ps.since) : -Infinity) : -Infinity;
+  return [...local]
+    .filter((p) => toMs(p.deviceTime) > sinceMs)
+    .sort((a, b) => toMs(a.deviceTime) - toMs(b.deviceTime))
+    .reduce((acc, p) => afterPunch(acc, p.kind, p.deviceTime), e);
+}
+
+/** The grid's status line under a name ('' = nothing to say). With `now` and a punch order, a shift open too long reads as off. */
+export function workStatusOf(e: OrderInfo, now?: Date | string | number): string {
+  const ps = e.punch_state;
+  if (ps && now !== undefined) {
+    const { state } = punchOrderStateAfter(ps.last_kind, ps.since, now, e.multi_branch === true);
+    return state === 'ON_BREAK' ? 'On break' : state === 'IN_TRANSPORT' ? 'Travelling' : state === 'WORKING' ? 'At work' : '';
+  }
   if (e.last_kind === 'BREAK_OUT') return 'On break';
   if (e.last_kind === 'TRANSPORT_OUT' && e.multi_branch === true) return 'Travelling';
   return e.suggested_kind === 'OUT' ? 'At work' : '';
