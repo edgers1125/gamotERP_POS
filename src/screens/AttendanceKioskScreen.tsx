@@ -1,7 +1,7 @@
 // Attendance kiosk mode (CLAUDE.md "Attendance kiosk mode"; GamotERP docs/plans/hr-payroll-attendance.md "Kiosk punch
 // flow"): shown on the LOCKED till of a terminal HR made an attendance kiosk — nothing here can sell. Flow:
-//   person (grid of names + initials, search) → the kind (the suggested one big; Time in / out, Break out / in, and
-//   Transport out / in for multi-branch staff — app 1.3.0) → PIN (online: checked by
+//   person (grid of names + initials, search) → the kind (the suggested one big; Time in / out, Start break / End break, and
+//   Leave for other branch / Arrive at branch for multi-branch staff — app 1.3.0) → PIN (online: checked by
 //   the server, which answers a ticket + the liveness challenge; offline — no answer at all — skipped, the server flags
 //   PIN_NOT_CHECKED; 403 SUBSCRIPTION_LOCKED → no punch, paused + a forced check-in, never the offline path) →
 //   camera: the 2-step challenge with photos (LivenessCapture) → saved on the tablet + sent → "Time in recorded 8:02 AM"
@@ -350,7 +350,7 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
 
 // ---- Time in / Time out / break / transport ------------------------------------------------------------------------
 
-// Like the web kiosk: the suggested kind big (back from the break after a break out, arrived after a transport out, else
+// Like the web kiosk: the suggested kind big (back from the break after a break start, arrived after leaving for the other branch, else
 // the server's IN / OUT — punch.ts suggestedKindOf), every other kind this person may punch below it (break for
 // everyone, transport only when stationed at 2+ branches — punchKindsFor).
 function KindStep({ emp, online, onChoose, onBack }: { emp: Employee; online: boolean; onChoose: (k: Kind) => void; onBack: () => void }) {
@@ -384,8 +384,8 @@ function KindStep({ emp, online, onChoose, onBack }: { emp: Employee; online: bo
           </View>
           <Text style={styles.muted}>
             {emp.multi_branch === true
-              ? 'Break = your lunch break (not counted). Transport = travelling to your other branch (counted).'
-              : 'Break = your lunch break (not counted).'}
+              ? 'Start break / End break = your lunch break (not counted). Leave for other branch / Arrive at branch = travelling to your other branch (counted).'
+              : 'Start break / End break = your lunch break (not counted).'}
           </Text>
         </>
       )}

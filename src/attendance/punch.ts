@@ -32,10 +32,10 @@ export const onTheClockAfter = (k: PosPunchKind): boolean => k === 'IN' || k ===
 export const PUNCH_KIND_LABEL: Record<PosPunchKind, string> = {
   IN: 'Time in',
   OUT: 'Time out',
-  BREAK_OUT: 'Break out',
-  BREAK_IN: 'Break in',
-  TRANSPORT_OUT: 'Transport out',
-  TRANSPORT_IN: 'Transport in',
+  BREAK_OUT: 'Start break',
+  BREAK_IN: 'End break',
+  TRANSPORT_OUT: 'Leave for other branch',
+  TRANSPORT_IN: 'Arrive at branch',
 };
 
 type KindInfo = Pick<PosAttendanceEmployee, 'suggested_kind' | 'last_kind' | 'multi_branch'>;
@@ -45,7 +45,7 @@ export function punchKindsFor(e: KindInfo): PosPunchKind[] {
   return e.multi_branch === true ? [...PUNCH_KINDS] : PUNCH_KINDS.filter((k) => !isTransportKind(k));
 }
 
-/** What the kiosk suggests: back from the break after a break out, arrived after a transport out, else the server's IN / OUT. */
+/** What the kiosk suggests: back from the break after a break start, arrived after leaving for the other branch, else the server's IN / OUT. */
 export function suggestedKindOf(e: KindInfo): PosPunchKind {
   if (e.last_kind === 'BREAK_OUT') return 'BREAK_IN';
   if (e.last_kind === 'TRANSPORT_OUT' && e.multi_branch === true) return 'TRANSPORT_IN';

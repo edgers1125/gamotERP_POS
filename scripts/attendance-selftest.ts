@@ -365,8 +365,8 @@ check('a recorded punch / null is not', !isLivenessRefusal({ status: 'RECORDED',
 // ---- wording ----------------------------------------------------------------------------------------------------
 
 check('Time in recorded 8:02 AM', punchMessage('IN', new Date('2026-10-05T00:02:00Z'), 'RECORDED') === 'Time in recorded 8:02 AM', punchMessage('IN', new Date('2026-10-05T00:02:00Z'), 'RECORDED'));
-check('Break out recorded 12:01 PM', punchMessage('BREAK_OUT', new Date('2026-10-05T04:01:00Z'), 'RECORDED') === 'Break out recorded 12:01 PM');
-check('Transport in saved 2:15 PM', punchMessage('TRANSPORT_IN', new Date('2026-10-05T06:15:00Z'), 'SAVED_ON_TABLET') === 'Transport in saved 2:15 PM');
+check('Start break recorded 12:01 PM', punchMessage('BREAK_OUT', new Date('2026-10-05T04:01:00Z'), 'RECORDED') === 'Start break recorded 12:01 PM');
+check('Arrive at branch saved 2:15 PM', punchMessage('TRANSPORT_IN', new Date('2026-10-05T06:15:00Z'), 'SAVED_ON_TABLET') === 'Arrive at branch saved 2:15 PM');
 check('Time out recorded 5:30 PM', punchMessage('OUT', new Date('2026-10-05T09:30:00Z'), 'RECORDED') === 'Time out recorded 5:30 PM', punchMessage('OUT', new Date('2026-10-05T09:30:00Z'), 'RECORDED'));
 
 console.log(`${checks - failures}/${checks} checks passed`);
