@@ -123,7 +123,7 @@ export interface AttendanceApi {
   kiosk(): Promise<PosAttendanceKiosk>;
   employees(): Promise<PosAttendanceEmployees>;
   /** Online PIN check → ticket + the server's challenge. ApiError codes WRONG_PIN / PIN_LOCKED / NO_PIN, 404, 429. */
-  pin(input: { user_id: number; pin: string; kind: PosPunchKind }): Promise<PosAttendanceTicket>;
+  pin(input: { user_id: number; pin: string; kind: PosPunchKind; unsent_punches?: { kind: PosPunchKind; device_time: string }[] }): Promise<PosAttendanceTicket>;
   /** Multipart upload of one signed punch: `punchText` = the signed canonical JSON, files = frame0..n (file:// URIs).
    * 201 RECORDED / 200 DUPLICATE / 422 REJECTED are all returned as the result body; anything else throws ApiError. */
   punch(input: { punchText: string; signature: string; files: { name: string; uri: string; filename: string }[] }): Promise<PosAttendancePunchResult>;

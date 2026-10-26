@@ -39,6 +39,7 @@ import {
   afterPunch,
   buildPunchPayload,
   DEFAULT_CAPTURE,
+  DEFAULT_OPEN_SHIFT_LIMIT_HOURS,
   deviceChallenge,
   discardsRefusal,
   framesFromJson,
@@ -48,7 +49,11 @@ import {
   randomIntFromBytes,
   storedPunchProblem,
   withLocalPunches,
+  openShiftLimitOf,
+  ownPunchesForRefresh,
+  unsentPunchesFor,
   type BuildPunchInput,
+  type UnsentPunch,
   type QueuedFrame,
 } from './punch';
 
@@ -83,6 +88,8 @@ export interface AttendanceKioskState {
   rejected: number;
   /** Why the last upload stopped, or null. */
   uploadError: string | null;
+  /** The list's open_shift_limit_hours (cached with it; 16 when absent). */
+  openShiftLimitHours: number;
 }
 
 export const useAttendanceKiosk = create<AttendanceKioskState>()(() => ({
@@ -94,6 +101,7 @@ export const useAttendanceKiosk = create<AttendanceKioskState>()(() => ({
   unsent: 0,
   rejected: 0,
   uploadError: null,
+  openShiftLimitHours: DEFAULT_OPEN_SHIFT_LIMIT_HOURS,
 }));
 const set = (patch: Partial<AttendanceKioskState>) => useAttendanceKiosk.setState(patch);
 
@@ -117,6 +125,10 @@ async function currentDeviceId(): Promise<number | null> {
   return (await localStore.getEnrollment())?.device_id ?? null;
 }
 
+/** The kiosk info as cached: the list's open_shift_limit_hours is stored alongside it (same JSON). */
+type CachedKiosk = PosAttendanceKiosk & { open_shift_limit_hours?: number };
+const limitOfKiosk = (k: PosAttendanceKiosk | null): number => openShiftLimitOf((k as CachedKiosk | null)?.open_shift_limit_hours);
+
 async function saveCache(deviceId: number, patch: { enabled: boolean; reason: string | null; kiosk: PosAttendanceKiosk | null; employees: PosAttendanceEmployee[] }): Promise<void> {
   const checkedAt = new Date().toISOString();
   await withDb((conn) =>
@@ -132,6 +144,7 @@ async function saveCache(deviceId: number, patch: { enabled: boolean; reason: st
     kiosk: patch.kiosk,
     employees: patch.employees,
     checkedAt,
+    openShiftLimitHours: limitOfKiosk(patch.kiosk),
   });
 }
 
@@ -149,6 +162,7 @@ async function loadCache(): Promise<void> {
     kiosk: jsonOrNull<PosAttendanceKiosk>(row.kiosk_json),
     employees: jsonOrNull<PosAttendanceEmployee[]>(row.employees_json) ?? [],
     checkedAt: strOrNull(row.checked_at),
+    openShiftLimitHours: limitOfKiosk(jsonOrNull<PosAttendanceKiosk>(row.kiosk_json)),
   });
 }
 
@@ -309,11 +323,22 @@ export function recordPunch(input: RecordPunchInput): Promise<LocalPunch> {
 
 /** After a punch: the cached last kind + suggestion for that person (punch.ts afterPunch) until the server's list says otherwise. */
 async function flipSuggestion(userId: number, kind: PosPunchKind, at: string): Promise<void> {
-  const s = useAttendanceKiosk.getState();
   const deviceId = await currentDeviceId();
-  if (deviceId === null || s.mode !== 'ON') return;
-  const employees = s.employees.map((e) => (e.user_id === userId ? afterPunch(e, kind, at) : e));
-  await saveCache(deviceId, { enabled: true, reason: null, kiosk: s.kiosk, employees });
+  // Read-modify-write on the LATEST store state, serialised with refreshKiosk's save (cacheLock): neither writes a stale cache.
+  await withCacheLock(async () => {
+    const s = useAttendanceKiosk.getState();
+    if (deviceId === null || s.mode !== 'ON') return;
+    const employees = s.employees.map((e) => (e.user_id === userId ? afterPunch(e, kind, at, s.openShiftLimitHours) : e));
+    await saveCache(deviceId, { enabled: true, reason: null, kiosk: s.kiosk, employees });
+  });
+}
+
+let cacheLockTail: Promise<unknown> = Promise.resolve();
+/** Runs `fn` after every earlier cache read-modify-write finished (the cache is written by punches and by list refreshes). */
+function withCacheLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = cacheLockTail.then(fn, fn);
+  cacheLockTail = run.catch(() => undefined);
+  return run;
 }
 
 export { isLivenessRefusal };
@@ -323,17 +348,28 @@ export async function getPunch(clientUuid: string): Promise<LocalPunch | null> {
   return r ? punchFromRow(r) : null;
 }
 
-/** Punches still waiting to upload, per employee — newer than any server list that doesn't have them yet. */
-async function pendingPunchesByUser(): Promise<Map<number, { kind: PosPunchKind; deviceTime: string }[]>> {
-  const out = new Map<number, { kind: PosPunchKind; deviceTime: string }[]>();
-  const r = await withDb(async (conn) => rows(await conn.execute("SELECT user_id, kind, device_time FROM attendance_punches WHERE status = 'PENDING' ORDER BY seq")));
-  for (const x of r) {
-    const id = Number(x.user_id);
-    const list = out.get(id) ?? [];
-    list.push({ kind: x.kind as PosPunchKind, deviceTime: String(x.device_time) });
-    out.set(id, list);
+/** This tablet's own punches to re-apply on a list refresh: PENDING + RECORDED in the last 24 h, per employee (see ownPunchesForRefresh). */
+async function ownPunchesByUser(): Promise<Map<number, { kind: PosPunchKind; deviceTime: string }[]>> {
+  const r = await withDb(async (conn) =>
+    rows(await conn.execute("SELECT user_id, kind, device_time, status FROM attendance_punches WHERE status IN ('PENDING', 'RECORDED') ORDER BY seq")),
+  );
+  return ownPunchesForRefresh(
+    r.map((x) => ({ user_id: Number(x.user_id), kind: x.kind as PosPunchKind, deviceTime: String(x.device_time), status: String(x.status) })),
+    Date.now(),
+  );
+}
+
+/** Unsent punches of one person, for the PIN step's `unsent_punches` (oldest first, max 20). Never throws. */
+export async function unsentPunchesForEmployee(userId: number): Promise<UnsentPunch[]> {
+  try {
+    const r = await withDb(async (conn) => rows(await conn.execute("SELECT user_id, kind, device_time, status FROM attendance_punches WHERE status = 'PENDING' AND user_id = ? ORDER BY seq", [userId])));
+    return unsentPunchesFor(
+      r.map((x) => ({ user_id: Number(x.user_id), kind: x.kind as PosPunchKind, deviceTime: String(x.device_time), status: 'PENDING' })),
+      userId,
+    );
+  } catch {
+    return [];
   }
-  return out;
 }
 
 /** Punches the server refused (newest first) — shown on the kiosk for a manager. */
@@ -621,9 +657,15 @@ export function refreshKiosk(opts?: { force?: boolean }): Promise<void> {
       const kiosk = await attendanceApi.kiosk();
       const list = await attendanceApi.employees();
       // The list is the server's view; punches taken here and not yet uploaded are newer — keep them in the punch order.
-      const pending = await pendingPunchesByUser().catch(() => new Map<number, { kind: PosPunchKind; deviceTime: string }[]>());
-      const items = list.items.map((e) => (pending.has(e.user_id) ? withLocalPunches(e, pending.get(e.user_id)!) : e));
-      await saveCache(deviceId, { enabled: true, reason: null, kiosk: { ...kiosk, employees_version: list.version }, employees: items });
+      // The queue is read INSIDE the cache lock (after the list) and RECORDED rows count too: a punch uploaded between the
+      // list read and now is in neither the list nor PENDING, so it is re-applied (withLocalPunches skips older ones).
+      const limit = openShiftLimitOf(list.open_shift_limit_hours);
+      await withCacheLock(async () => {
+        const own = await ownPunchesByUser().catch(() => new Map<number, { kind: PosPunchKind; deviceTime: string }[]>());
+        const items = list.items.map((e) => (own.has(e.user_id) ? withLocalPunches(e, own.get(e.user_id)!, limit) : e));
+        const cached: CachedKiosk = { ...kiosk, employees_version: list.version, open_shift_limit_hours: limit };
+        await saveCache(deviceId, { enabled: true, reason: null, kiosk: cached, employees: items });
+      });
       kioskOffRetryAt = 0; // a kiosk again: waiting punches go out on the next cycle
     } catch (e) {
       const err = asApiError(e);

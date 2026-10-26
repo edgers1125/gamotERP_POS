@@ -63,10 +63,8 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   TRANSPORT_OUT (multi-branch only); ON_BREAK → BREAK_IN only; IN_TRANSPORT → TRANSPORT_IN only. The kiosk's kind step
   shows ONLY the allowed buttons (`allowedKindsFor`; big button = `suggestedAmong`). "Last known state" = the employee's
   cached `punch_state` (server list: last_kind + since) advanced by this tablet's own punches: `afterPunch` after each
-  save, and `withLocalPunches` on every list refresh (PENDING queue rows NEWER than the server's `since` are re-applied, so a
-  list read can't undo an unsent punch). The state is re-judged with the device clock at render time, so a shift open > 16 h
-  offers IN again offline (grid line also reads off). Limit = `DEFAULT_OPEN_SHIFT_LIMIT_HOURS` (16; the list's
-  `open_shift_limit_hours` is not cached). Online 409 `PUNCH_OUT_OF_ORDER` at the PIN step → the server's message on the kind
+  save, and `withLocalPunches` on every list refresh (this tablet's PENDING **and RECORDED (last 24 h)** queue rows NEWER than the server's `since` are re-applied — `ownPunchesForRefresh`, read INSIDE `withCacheLock` after the list — so neither an unsent punch nor one uploaded between the list read and the queue read is lost; `flipSuggestion` runs under the same lock on the latest store state). The state is re-judged with the device clock at render time, so a shift open > 16 h
+  offers IN again offline (grid line also reads off). Limit = the list's `open_shift_limit_hours` (`openShiftLimitOf`, default 16), cached inside `kiosk_json`, held in the store as `openShiftLimitHours` and passed to `allowedKindsFor` / `afterPunch` / `withLocalPunches` / `workStatusOf`. The PIN-step request also carries `unsent_punches` (this employee's PENDING punches, oldest first, max 20: `{kind, device_time}`; `unsentPunchesForEmployee`) so a queued Start break doesn't cause a 409 loop (additive server field; typed locally in `contracts.ts`). Online 409 `PUNCH_OUT_OF_ORDER` at the PIN step → the server's message on the kind
   step + list re-read (the cached state follows). An OFFLINE punch is always uploaded; the server flags a misfit
   `OUT_OF_ORDER` (never refused). **Older server** (no `punch_state` on the list) → every kind shown as before (the PIN
   step then gets the 409 on a bad order, handled the same way). Self-test covers every transition, the 16 h rule, night / split

@@ -27,6 +27,7 @@ import {
   recordPunch,
   refreshKiosk,
   rejectedPunches,
+  unsentPunchesForEmployee,
   uploadAndWait,
   useAttendanceKiosk,
   type LocalPunch,
@@ -292,6 +293,7 @@ export function AttendanceKioskScreen() {
 function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; disabled: boolean }) {
   const styles = useStyles();
   const employees = useAttendanceKiosk((s) => s.employees);
+  const limitHours = useAttendanceKiosk((s) => s.openShiftLimitHours);
   const [search, setSearch] = useState('');
   const [width, setWidth] = useState(0);
   const columns = Math.max(2, Math.floor((width || 600) / 190));
@@ -340,7 +342,7 @@ function EmployeeGrid({ onPick, disabled }: { onPick: (emp: Employee) => void; d
             {notReady(item) ? (
               <Text style={styles.personNotReady}>Ask HR: no {missingText(item.missing)}</Text>
             ) : (
-              <Text style={styles.personHint}>{workStatusOf(item, punchRuleNow(Date.now(), serverClock.offsetMsSync())) || ' '}</Text>
+              <Text style={styles.personHint}>{workStatusOf(item, punchRuleNow(Date.now(), serverClock.offsetMsSync()), limitHours) || ' '}</Text>
             )}
           </Pressable>
         )}
@@ -359,9 +361,10 @@ function KindStep({ emp: stageEmp, notice, online, onChoose, onBack }: { emp: Em
   const styles = useStyles();
   // The live cache entry (a list re-read after a refused punch, or this tablet's own punches, change what is allowed).
   const emp = useAttendanceKiosk((s) => s.employees.find((e) => e.user_id === stageEmp.user_id)) ?? stageEmp;
+  const limitHours = useAttendanceKiosk((s) => s.openShiftLimitHours);
   // Punch ORDER (punch.ts): only the kinds that may come next. An older server sends no punch_state → every kind, as before.
   // Judged on the server-corrected clock the punch is stamped with (never the raw device clock).
-  const allowed = allowedKindsFor(emp, punchRuleNow(Date.now(), serverClock.offsetMsSync())) ?? punchKindsFor(emp);
+  const allowed = allowedKindsFor(emp, punchRuleNow(Date.now(), serverClock.offsetMsSync()), limitHours) ?? punchKindsFor(emp);
   const suggested = suggestedAmong(emp, allowed);
   const others = allowed.filter((k) => k !== suggested);
   // Not set up (PIN and/or reference photo — readiness, known offline too from the cached list); online, a missing PIN.
@@ -436,7 +439,8 @@ function PinStep({
     setBusy(true);
     setError(null);
     try {
-      const t = await attendanceApi.pin({ user_id: emp.user_id, pin, kind });
+      const unsent = await unsentPunchesForEmployee(emp.user_id);
+      const t = await attendanceApi.pin({ user_id: emp.user_id, pin, kind, ...(unsent.length > 0 ? { unsent_punches: unsent } : {}) });
       onTicket(t);
     } catch (e) {
       setPin('');

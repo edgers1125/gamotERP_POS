@@ -20,6 +20,9 @@ import {
   punchRuleNow,
   punchStateAfter,
   suggestedAmong,
+  openShiftLimitOf,
+  ownPunchesForRefresh,
+  unsentPunchesFor,
   withLocalPunches,
   buildPunchPayload,
   deviceChallenge,
@@ -415,6 +418,30 @@ const base: BuildPunchInput = {
   check('older server: local punch updates last_kind but adds no punch_state', old.last_kind === 'IN' && !('punch_state' in old && old.punch_state));
   const af = afterPunch(synced, 'IN', t(2));
   check('afterPunch keeps punch_state in step', af.punch_state!.state === 'WORKING' && af.punch_state!.since === t(2) && af.last_kind === 'IN');
+
+  // A: refresh race — a punch uploaded (RECORDED) between the list read and the queue read is re-applied.
+  const qrows = [
+    { user_id: 7, kind: 'IN' as const, deviceTime: t(2), status: 'RECORDED' },
+    { user_id: 7, kind: 'BREAK_OUT' as const, deviceTime: t(4), status: 'PENDING' },
+    { user_id: 8, kind: 'IN' as const, deviceTime: new Date(at(2).getTime() - 3 * 86_400_000).toISOString(), status: 'RECORDED' },
+    { user_id: 9, kind: 'IN' as const, deviceTime: t(2), status: 'REJECTED' },
+  ];
+  const own = ownPunchesForRefresh(qrows, at(5).getTime());
+  check('A: own punches = PENDING + recent RECORDED, not old RECORDED / REJECTED', own.get(7)!.length === 2 && !own.has(8) && !own.has(9));
+  const stale = emp('OUT', T0); // the list read before the upload: still OFF
+  check('A: a RECORDED local IN newer than the server since is applied', allowedKindsFor(withLocalPunches(stale, own.get(7)!), at(5))!.join() === 'BREAK_IN');
+  check('A: a RECORDED punch the list already has (not newer) is skipped', withLocalPunches(emp('IN', t(2)), [{ kind: 'IN', deviceTime: t(2) }]).punch_state!.since === t(2));
+  // B: custom open-shift limit from the list.
+  check('B: limit from the list (12 h) honoured by allowedKindsFor', allowedKindsFor(emp('IN', T0), at(13), 12)!.join() === 'IN' && allowedKindsFor(emp('IN', T0), at(13))!.join() === 'OUT,BREAK_OUT');
+  check('B: limit honoured by workStatusOf', workStatusOf(emp('IN', T0), at(13), 12) === '' && workStatusOf(emp('IN', T0), at(13)) === 'At work');
+  check('B: afterPunch / withLocalPunches carry the limit', withLocalPunches(emp('OUT', T0), [{ kind: 'IN', deviceTime: t(1) }], 12).punch_state!.missing_time_out === false && punchStateAfter('IN', T0, at(13), false, 12).missing_time_out === true);
+  check('B: openShiftLimitOf defaults to 16 when absent / bad', openShiftLimitOf(undefined) === 16 && openShiftLimitOf(0) === 16 && openShiftLimitOf('x') === 16 && openShiftLimitOf(12) === 12);
+  // C: the PIN step's unsent_punches — one employee, oldest first, max 20.
+  const many = Array.from({ length: 25 }, (_, n) => ({ user_id: 7, kind: 'IN' as const, deviceTime: new Date(at(0).getTime() + (24 - n) * 60_000).toISOString(), status: 'PENDING' }));
+  const u1 = unsentPunchesFor([...qrows, { user_id: 8, kind: 'OUT' as const, deviceTime: t(1), status: 'PENDING' }], 7);
+  check('C: only this employee PENDING punches (RECORDED / other people left out)', u1.length === 1 && u1[0].kind === 'BREAK_OUT' && u1[0].device_time === t(4));
+  const u2 = unsentPunchesFor(many, 7);
+  check('C: oldest first, max 20 (newest 20 kept)', u2.length === 20 && u2.every((x, n) => n === 0 || Date.parse(x.device_time) > Date.parse(u2[n - 1].device_time)) && u2[19].device_time === many[0].deviceTime);
 }
 
 // ---- queue row: frames column + tamper detection -----------------------------------------------------------------
