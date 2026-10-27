@@ -20,6 +20,7 @@ import { ApiError } from '../../contracts';
 import { Banner, Button, TextField } from '../../ui/components';
 import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, spacing } from '../../ui/theme';
+import { RX_WALK_IN_REASON } from '../../sale/prescription';
 import { newClientProblem, newClientUuid, type SaleClient } from '../../sale/cart';
 import {
   EMPTY_STATUTORY,
@@ -106,6 +107,7 @@ export function ClientDialog({
   statutory,
   eligibleCount,
   online,
+  rxRequired,
   onSave,
   onClose,
 }: {
@@ -115,6 +117,8 @@ export function ClientDialog({
   /** Eligible (sc_pwd_eligible) lines in the cart. */
   eligibleCount: number;
   online: boolean;
+  /** The cart has a prescription item: the patient must be named — "No client details" is off. */
+  rxRequired?: boolean;
   onSave: (client: SaleClient, statutory: StatutoryDraft | null) => void;
   onClose: () => void;
 }) {
@@ -142,7 +146,7 @@ export function ClientDialog({
 
   useEffect(() => {
     if (!visible) return;
-    setNoDetails(value.kind === 'WALK_IN');
+    setNoDetails(value.kind === 'WALK_IN' && !rxRequired);
     setMatched(value.kind === 'EXISTING' ? value.client : null);
     setMatchedVia(null);
     setCardFromRecord(false);
@@ -351,9 +355,13 @@ export function ClientDialog({
       }
     >
       {/* Small and on the right: skipping the client is an explicit choice, never the prominent one. */}
-      <Pressable accessibilityRole="button" onPress={toggleNoDetails} hitSlop={8} style={styles.skipRow}>
-        <Text style={styles.skip}>{noDetails ? 'Enter client details instead' : 'No client details'}</Text>
-      </Pressable>
+      {rxRequired ? (
+        <Text style={[styles.skip, styles.skipRow, styles.skipNote]}>{RX_WALK_IN_REASON}</Text>
+      ) : (
+        <Pressable accessibilityRole="button" onPress={toggleNoDetails} hitSlop={8} style={styles.skipRow}>
+          <Text style={styles.skip}>{noDetails ? 'Enter client details instead' : 'No client details'}</Text>
+        </Pressable>
+      )}
 
       {noDetails ? (
         <View>
@@ -523,6 +531,7 @@ const useStyles = makeStyles((c, t) => ({
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
   cell: { flex: 1 },
   skipRow: { alignSelf: 'flex-end', marginBottom: spacing.xs },
+  skipNote: { textDecorationLine: 'none', textAlign: 'right' },
   skip: { ...t.caption, fontSize: 12, color: c.muted, textDecorationLine: 'underline' },
   banner: { marginBottom: spacing.sm },
   // The Senior/PWD discount block: a tinted panel so it reads as one part of the form, outlined in primary once chosen.

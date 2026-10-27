@@ -39,6 +39,7 @@ import { CashDrawerScreen } from './src/screens/CashDrawerScreen';
 import { CashierLoginScreen } from './src/screens/CashierLoginScreen';
 import EnrollScreen from './src/screens/EnrollScreen';
 import { PaymentScreen } from './src/screens/PaymentScreen';
+import { PrescriptionScreen } from './src/screens/PrescriptionScreen';
 import { ReceiptScreen } from './src/screens/ReceiptScreen';
 import { RefundScreen, type RefundParams } from './src/screens/RefundScreen';
 import { SalesTodayScreen } from './src/screens/SalesTodayScreen';
@@ -402,6 +403,7 @@ function MainStack({ onReEnroll, attendanceOnly = false }: { onReEnroll: () => P
         {attendanceOnly ? null : (
           <>
             <Stack.Screen name="Sell" component={SellScreen} />
+            <Stack.Screen name="Prescription" component={PrescriptionScreen} />
             <Stack.Screen name="Payment" component={PaymentScreen} />
             <Stack.Screen name="Receipt" component={ReceiptScreen} options={{ gestureEnabled: false }} />
             <Stack.Screen name="SalesToday" component={SalesTodayScreen} />
@@ -471,7 +473,7 @@ function TopBar({ terminalLabel, signedIn, attendanceOnly = false }: { terminalL
   const showSections = signedIn || attendanceOnly;
   const current = currentRoute.useValue();
   const activeSection: Section | null =
-    current === 'Payment' || current === 'Receipt' ? 'Sell' : current === 'Refund' ? 'SalesToday' : (current as Section | null);
+    current === 'Prescription' || current === 'Payment' || current === 'Receipt' ? 'Sell' : current === 'Refund' ? 'SalesToday' : (current as Section | null);
   const pinMode = !!cashier && !cashierSession.isOnlineSession();
   // Sync pill: soft status background + strong text (red when something was rejected, amber offline, green online).
   const statusTone =
@@ -565,8 +567,8 @@ function BlockingBanner({ signedIn, attendanceOnly = false }: { signedIn: boolea
   const licenseExpired = useSyncStatus((s) => s.license?.code === 'EXPIRED');
   const current = currentRoute.useValue();
   if (!revoked && !updateRequired && !blockedReason) return null;
-  // The Sell and Payment screens show the same reason in their own "Selling is paused" banner.
-  if (signedIn && (current === 'Sell' || current === 'Payment')) return null;
+  // The Sell, Prescription and Payment screens show the same reason in their own "Selling is paused" banner.
+  if (signedIn && (current === 'Sell' || current === 'Prescription' || current === 'Payment')) return null;
   // An attendance-only tablet: the Attendance screen says it itself; elsewhere the same reasons, worded for punches.
   if (attendanceOnly) {
     if (current === 'Attendance') return null;

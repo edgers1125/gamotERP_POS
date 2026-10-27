@@ -79,6 +79,7 @@ export function CartLineRow({
             each · {line.skuCode}
             {line.isVatable ? '' : ' · non-VAT'}
           </Text>
+          {line.rxRequired || line.dangerousDrug ? <StatusBadge label={line.dangerousDrug ? 'Rx · DD' : 'Rx'} tone="warning" style={styles.promoChip} /> : null}
           {promo ? <StatusBadge label={`Promo: ${promo.name} · ${promo.terms}`} tone="success" style={styles.promoChip} /> : null}
         </View>
         <View style={styles.amountCol}>

@@ -17,7 +17,8 @@ import { useCashier } from '../auth/cashierSession';
 import { AUTO_TIME_OFF_MESSAGE } from '../db/policy';
 import { autoTime } from '../device/autoTime';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, shownPrice, useCart } from '../sale/cart';
+import { cartNeedsRx, RX_WALK_IN_REASON } from '../sale/prescription';
+import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, rxLinesOf, shownPrice, useCart } from '../sale/cart';
 import { promosOf } from '../sale/promos';
 import { pricesIncludeVatOf } from '../sale/totals';
 import { saleClientName } from '../sale/checkout';
@@ -128,6 +129,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
   const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory]); // eslint-disable-line react-hooks/exhaustive-deps
   // No open cash drawer on this terminal → Charge stays off (localStore.recordSale refuses too).
   const drawer = useDrawerGate();
+  const needsRx = cartNeedsRx(rxLinesOf(cart));
   const problem = blocked ?? drawer.problem ?? data.error ?? cartProblem(cart, totals);
   const eligibleCount = cart.lines.filter((l) => l.scPwdEligible).length;
   const itemCount = cart.lines.reduce((s, l) => s + l.quantity, 0);
@@ -216,7 +218,9 @@ export function SellScreen({ navigation }: SellScreenProps) {
             disabled={!!blocked}
             onPress={() => setDialog('client')}
           />
-          {cart.client.kind === 'UNSET' ? (
+          {cart.client.kind === 'UNSET' && needsRx ? (
+            <Text style={styles.rxNote}>{RX_WALK_IN_REASON}</Text>
+          ) : cart.client.kind === 'UNSET' ? (
             <Pressable
               accessibilityRole="button"
               disabled={!!blocked}
@@ -306,9 +310,9 @@ export function SellScreen({ navigation }: SellScreenProps) {
           {pinSummary ? summary : null}
 
           <Button
-            title={cart.lines.length > 0 ? `Charge ${formatPeso(totals.grandTotal)}` : 'Charge'}
+            title={cart.lines.length > 0 ? (needsRx ? `Next: prescription · ${formatPeso(totals.grandTotal)}` : `Charge ${formatPeso(totals.grandTotal)}`) : 'Charge'}
             variant="primary"
-            onPress={() => navigation.navigate('Payment')}
+            onPress={() => navigation.navigate(needsRx ? 'Prescription' : 'Payment')}
             disabled={problem !== null}
             style={styles.charge}
           />
@@ -329,6 +333,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
         statutory={cart.statutory}
         eligibleCount={eligibleCount}
         online={sync.online}
+        rxRequired={needsRx}
         onClose={() => setDialog(null)}
         onSave={(client, statutory) => {
           cart.setClient(client);
@@ -425,6 +430,7 @@ const useStyles = makeStyles((c, t) => ({
     backgroundColor: c.primaryTint,
   },
   clientActions: { alignItems: 'flex-end', gap: spacing.xs },
+  rxNote: { ...t.caption, fontSize: 12, color: c.muted, maxWidth: 220, textAlign: 'right' },
   // Deliberately small and quiet: skipping the client is an explicit choice, not the easy default.
   noDetails: { ...t.caption, fontSize: 12, color: c.muted, textDecorationLine: 'underline' },
   clientBarRequired: { borderColor: c.warning, backgroundColor: c.warningSoft },

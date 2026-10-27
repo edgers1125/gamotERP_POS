@@ -13,6 +13,7 @@ import { customerDisplay } from '../display/customerDisplay';
 import { printer } from '../printer/printer';
 import { useSyncStatus } from '../sync/syncEngine';
 import { formatPeso } from '../sale/money';
+import { rxIssueTitle } from '../sale/prescription';
 import type { SaleStackParamList } from '../sale/navigation';
 import { buildReceipt, loadReceiptSnapshot, receiptTextLines, rememberBuyer, needsBuyerLookup } from '../sale/receipt';
 import { api } from '../api/client';
@@ -173,11 +174,17 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
             message={status}
             style={styles.banner}
           />
+          {result?.prescription ? (
+            <Text style={styles.rxLine}>
+              Prescription: {result.prescription.reference}
+              {result.prescription.is_dangerous_drug ? ' · dangerous drugs' : ''}
+            </Text>
+          ) : null}
           {result?.stock_status === 'OVERSOLD' ? (
             <Banner kind="warning" message="The branch’s recorded stock didn’t cover this sale, so it was saved as Oversold — post the stock once it’s received." style={styles.banner} />
           ) : null}
           {result?.exceptions?.length ? (
-            <Banner kind="warning" title="Flagged for review" message={result.exceptions.map((x) => x.message).join('\n')} style={styles.banner} />
+            <Banner kind="warning" title="Flagged for review" message={result.exceptions.map((x) => (x.kind === 'PRESCRIPTION_ISSUE' ? `${rxIssueTitle(x.code)} — ${x.message}` : x.message)).join('\n')} style={styles.banner} />
           ) : null}
           {receipt.missing_required.length > 0 ? (
             <Banner
@@ -247,6 +254,7 @@ const useStyles = makeStyles((c, t) => ({
   },
   changeLabel: { ...t.heading, color: c.success },
   changeValue: { ...t.display, fontSize: 40, color: c.success, fontVariant: ['tabular-nums'] },
+  rxLine: { ...t.body, marginBottom: spacing.sm },
   total: { ...t.heading, fontVariant: ['tabular-nums'], marginBottom: spacing.lg },
   banner: { marginBottom: spacing.sm },
   spacer: { flex: 1, minHeight: spacing.lg },

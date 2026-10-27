@@ -2,7 +2,7 @@
   "expo": {
     "name": "GamotERP POS",
     "slug": "gamoterp-pos",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,7 +18,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.medsource.gamoterp.pos",
-      "versionCode": 4,
+      "versionCode": 5,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.INTERNET",

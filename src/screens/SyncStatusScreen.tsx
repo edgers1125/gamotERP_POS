@@ -24,6 +24,7 @@ import type { LicenseCode } from '../license/lease';
 import { localStore } from '../db/localStore';
 import { serverClock } from '../device/serverClock';
 import { formatPeso } from '../sale/money';
+import { rxIssueTitle } from '../sale/prescription';
 import { syncEngine, useSyncStatus } from '../sync/syncEngine';
 import { Banner, Button, Screen } from '../ui/components';
 import { makeStyles, useThemeColors } from '../ui/brandTheme';
@@ -215,7 +216,10 @@ export function SyncStatusScreen(_props: Props) {
                     <View style={[styles.pill, styles.pillWarning]}>
                       <Text style={[styles.pillText, styles.pillTextWarning]}>{x.kind}</Text>
                     </View>
-                    <Text style={styles.exceptionText}>{x.message}</Text>
+                    <Text style={styles.exceptionText}>
+                      {x.kind === 'PRESCRIPTION_ISSUE' ? <Text style={styles.exceptionTitle}>{rxIssueTitle(x.code)}{'\n'}</Text> : null}
+                      {x.message}
+                    </Text>
                   </View>
                 ))}
                 {s.voided?.sync_status === 'REJECTED' ? <Text style={styles.errorText}>The void of this sale was rejected.</Text> : null}
@@ -285,6 +289,7 @@ const useStyles = makeStyles((c, t) => ({
   errorText: { ...t.caption, color: c.danger },
   small: { ...t.caption },
   exception: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  exceptionTitle: { fontFamily: t.bodyStrong.fontFamily },
   exceptionText: { ...t.caption, color: c.text, flex: 1, paddingTop: 2 },
   pill: { alignSelf: 'flex-start', borderRadius: radius.pill, paddingVertical: 2, paddingHorizontal: spacing.sm + 2 },
   pillWarning: { backgroundColor: c.warningSoft },

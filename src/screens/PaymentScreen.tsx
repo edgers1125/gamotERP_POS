@@ -18,10 +18,12 @@ import { useCashier } from '../auth/cashierSession';
 import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, shownPrice, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, shownPrice, useCart } from '../sale/cart';
 import { amountDueOf, withholdingFigures } from '../sale/billing';
-import { completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
+import { checkCartPrescription, completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
+import { cartNeedsRx } from '../sale/prescription';
+import { useDoctors } from '../sale/doctors';
 import type { SaleStackParamList } from '../sale/navigation';
 import { newPaymentLine, paymentsState, syncAutoLine, type PaymentDraft } from '../sale/payments';
 import { statutoryTypeLabel } from '../sale/statutory';
@@ -47,6 +49,8 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
   const [approving, setApproving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rxBack, setRxBack] = useState(false);
+  const doctors = useDoctors((s) => s.items);
   const wide = useWindowDimensions().width >= 720;
 
   const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -86,6 +90,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
     if (busy) return;
     setBusy(true);
     setError(null);
+    setRxBack(false);
     try {
       // Re-check the promos NOW (device clock + server offset — the same instant goes out as sold_at).
       const { at: soldAt, clock } = await stampClock();
@@ -94,6 +99,16 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
         setError(`${promoChange} Check the amount due and complete the sale again.`);
         setApproving(false);
         return;
+      }
+      // Prescription: the server's last word (online) before anything is saved; offline the local checks inside completeSale.
+      if (cartNeedsRx(rxLinesOf(useCart.getState()))) {
+        const rx = await checkCartPrescription(useCart.getState(), sync.online);
+        if (rx.kind === 'issues' || rx.kind === 'error') {
+          setError(rx.kind === 'error' ? rx.message : rx.issues.map((i) => i.message).join('\n'));
+          setRxBack(true);
+          setApproving(false);
+          return;
+        }
       }
       const sale = await completeSale({ state: useCart.getState(), payments: lines, methods, approval, online: sync.online, soldAt, clock });
       setApproving(false);
@@ -123,6 +138,15 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
     );
   }
 
+  const newRx = cart.rx?.mode === 'NEW' ? cart.rx : null;
+  const rxDoctor = newRx ? doctors.find((d) => d.id === newRx.doctorId) : null;
+  const rxSummary =
+    cart.rx?.mode === 'FILL'
+      ? `Prescription: fill ${cart.rx.prescription.reference}`
+      : cart.rx?.mode === 'NEW'
+        ? `Prescription: new — ${rxDoctor ? rxDoctor.name : 'no doctor'}, ${cart.rx.date}`
+        : '';
+
   // Client / Sold by and the totals (item + sale discounts shown as their own rows).
   const orderFooter = (
     <>
@@ -134,6 +158,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
             {statutoryTypeLabel(cart.statutory.type)} ID {cart.statutory.idNumber}
           </Text>
         ) : null}
+        {cart.rx ? <Text style={styles.metaText}>{rxSummary}</Text> : null}
         <Text style={styles.metaText}>Cashier: {cashier?.name ?? '—'}</Text>
         <Text style={styles.metaText}>Sold by: {data.bootstrap?.sales_staff.find((s) => s.id === cart.soldById)?.name ?? '—'}</Text>
       </View>
@@ -150,7 +175,15 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
     <View style={styles.root}>
       {blocked ? <Banner kind="danger" title={sync.subscriptionLocked ? 'Subscription locked — selling stopped' : 'Selling is paused'} message={blocked} style={styles.banner} /> : null}
       {!blocked ? <DrawerGateBanner gate={drawer} style={styles.banner} /> : null}
-      {error ? <Banner kind="danger" message={error} style={styles.banner} /> : null}
+      {error ? (
+        <Banner
+          kind="danger"
+          message={error}
+          actionLabel={rxBack ? 'Back to prescription' : undefined}
+          onAction={rxBack ? () => navigation.navigate('Prescription') : undefined}
+          style={styles.banner}
+        />
+      ) : null}
       {!error && cart.notice ? (
         <Banner kind="info" message={cart.notice} actionLabel="OK" onAction={() => cart.setNotice(null)} style={styles.banner} />
       ) : null}
