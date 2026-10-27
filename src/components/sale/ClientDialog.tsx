@@ -1,5 +1,7 @@
 // The sale's client — ONE form that looks like registering a new client, in this order:
-//   1. Senior Citizen / PWD discount (first, since the card identifies the person): None / Senior / PWD, then the card.
+//   1. Statutory discount (first, since the card identifies the person): None / Senior / PWD and — BIR Phase 2, when the
+//      company's settings offer them — NAAC / Solo Parent / Medal of Valor, then the card (Solo Parent: booklet, children,
+//      Rx attestation). This is the sale's FIRST card; further cards (Phase 2b) are added on the Sell screen.
 //   2. Client details: phone, then first / middle / last name.
 // Returning customers are recognised along the way (online, via GET /pos/clients — needs the network AND a live online
 // cashier token; see canSearchClients):
@@ -28,12 +30,18 @@ import {
   clientName,
   clientStatutoryBlock,
   normalizeIdNumber,
+  offeredTypes,
+  ruleSummary,
   statutoryClientConflict,
   statutoryProblem,
   statutoryTypeLabel,
+  type SoloParentChildDraft,
+  type StatutoryConfig,
   type StatutoryDraft,
   type StatutoryType,
 } from '../../sale/statutory';
+import { statutoryIdHasExpiry } from '@shared/statutory-rules';
+import { cleanDate, expiryLabel, issuerLabel, SoloParentFields } from './StatutoryCardParts';
 import { canSearchClients, clientLookupUnavailableReason } from './ClientSearch';
 import { ErrorText, HintText, SectionTitle, Segmented, Sheet } from './ui';
 
@@ -105,7 +113,9 @@ export function ClientDialog({
   visible,
   value,
   statutory,
-  eligibleCount,
+  config,
+  eligibleCountFor,
+  rxLineFor,
   online,
   rxRequired,
   onSave,
@@ -114,8 +124,12 @@ export function ClientDialog({
   visible: boolean;
   value: SaleClient;
   statutory: StatutoryDraft | null;
-  /** Eligible (sc_pwd_eligible) lines in the cart. */
-  eligibleCount: number;
+  /** The company's statutory discount rules (cart.statutoryConfig). */
+  config: StatutoryConfig;
+  /** Lines in the cart eligible for a card type. */
+  eligibleCountFor: (type: StatutoryType) => number;
+  /** A line eligible for the type is a prescription item (Solo Parent attestation). */
+  rxLineFor: (type: StatutoryType) => boolean;
   online: boolean;
   /** The cart has a prescription item: the patient must be named — "No client details" is off. */
   rxRequired?: boolean;
@@ -130,6 +144,9 @@ export function ClientDialog({
   const [idIssuer, setIdIssuer] = useState('');
   const [birthDate, setBirthDate] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
+  const [booklet, setBooklet] = useState('');
+  const [children, setChildren] = useState<SoloParentChildDraft[]>([]);
+  const [rxInChildName, setRxInChildName] = useState(false);
   const [phone, setPhone] = useState('');
   const [first, setFirst] = useState('');
   const [middle, setMiddle] = useState('');
@@ -168,11 +185,15 @@ export function ClientDialog({
     setIdIssuer(statutory?.idIssuer ?? '');
     setBirthDate(statutory?.birthDate ?? '');
     setExpiryDate(statutory?.expiryDate ?? '');
+    setBooklet(statutory?.bookletNumber ?? '');
+    setChildren(statutory?.children ?? []);
+    setRxInChildName(statutory?.rxInChildName ?? false);
     setTouched(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  const cleanDate = (t: string) => t.replace(/[^0-9-]/g, '').slice(0, 10);
+  const offered = offeredTypes(config);
+  const anyEligible = offered.some((t) => eligibleCountFor(t) > 0);
 
   // Uses a client on record: details filled and locked.
   // · Matched by their Senior/PWD ID → the card section takes their record's card (type, and whatever the cashier hasn't
@@ -186,7 +207,7 @@ export function ClientDialog({
     setMiddle(c.middle_name ?? '');
     setLast(c.last_name ?? '');
     if (c.phone_number) setPhone(c.phone_number);
-    if (!clientHasStatutory(c) || eligibleCount === 0) {
+    if (!clientHasStatutory(c) || !config.rules[c.statutory_type].enabled || eligibleCountFor(c.statutory_type) === 0) {
       setCardFromRecord(false);
       return;
     }
@@ -195,14 +216,16 @@ export function ClientDialog({
       setCard(c.statutory_type);
       setIdIssuer((v) => v || (c.statutory_id_issuer ?? ''));
       setBirthDate((v) => v || (c.date_of_birth ?? '').slice(0, 10));
-      if (c.statutory_type === 'PWD') setExpiryDate((v) => v || recordExpiry);
+      if (statutoryIdHasExpiry(c.statutory_type)) setExpiryDate((v) => v || recordExpiry);
+      if (c.statutory_type === 'SOLO_PARENT') setBooklet((v) => v || (c.statutory_booklet_number ?? ''));
       setCardFromRecord(false); // the cashier typed this card — "Not them?" keeps it
-    } else if (card === 'NONE' && clientStatutoryBlock(c) === null) {
+    } else if (card === 'NONE' && clientStatutoryBlock(c, config, true) === null) {
       setCard(c.statutory_type);
       setIdNumber(c.statutory_id_number);
       setIdIssuer(c.statutory_id_issuer ?? '');
       setBirthDate((c.date_of_birth ?? '').slice(0, 10));
       setExpiryDate(recordExpiry);
+      setBooklet(c.statutory_booklet_number ?? '');
       setCardFromRecord(true);
     } else {
       setCardFromRecord(false);
@@ -223,6 +246,9 @@ export function ClientDialog({
       setIdIssuer('');
       setBirthDate('');
       setExpiryDate('');
+      setBooklet('');
+      setChildren([]);
+      setRxInChildName(false);
     }
     setCardFromRecord(false);
   }
@@ -280,12 +306,15 @@ export function ClientDialog({
           idNumber,
           idIssuer,
           birthDate,
-          expiryDate: card === 'PWD' ? expiryDate : '',
+          expiryDate: statutoryIdHasExpiry(card) ? expiryDate : '',
+          bookletNumber: card === 'SOLO_PARENT' ? booklet : '',
+          children: card === 'SOLO_PARENT' ? children : [],
+          rxInChildName: card === 'SOLO_PARENT' && rxInChildName,
           firstName: first,
           middleName: middle,
           lastName: last,
         };
-  const cardBlock = matched && card === 'NONE' ? clientStatutoryBlock(matched) : null;
+  const cardBlock = matched && card === 'NONE' ? clientStatutoryBlock(matched, config, true) : null;
 
   const problem = useMemo(() => {
     if (noDetails) return null;
@@ -294,11 +323,11 @@ export function ClientDialog({
       if (p) return p;
     }
     if (draft) {
-      if (eligibleCount === 0) return 'No item in the cart qualifies for the Senior/PWD discount — choose None.';
-      return statutoryProblem(draft) ?? statutoryClientConflict(draft, matched);
+      if (eligibleCountFor(draft.type) === 0) return `No item in the cart qualifies for the ${statutoryTypeLabel(draft.type)} discount — choose None.`;
+      return statutoryProblem(draft, { config, rxLine: rxLineFor(draft.type) }) ?? statutoryClientConflict(draft, matched);
     }
     return null;
-  }, [noDetails, matched, first, last, phone, draft, eligibleCount]);
+  }, [noDetails, matched, first, last, phone, draft, config, eligibleCountFor, rxLineFor]);
 
   function save() {
     if (problem) {
@@ -328,6 +357,9 @@ export function ClientDialog({
     setCardFromRecord(false);
     setCard('NONE');
     setIdNumber('');
+    setBooklet('');
+    setChildren([]);
+    setRxInChildName(false);
     setPhone('');
     setFirst('');
     setMiddle('');
@@ -336,10 +368,15 @@ export function ClientDialog({
   }
 
   const locked = matched !== null;
+  const cardCount = card === 'NONE' ? 0 : eligibleCountFor(card);
   const cardSummary =
     card === 'NONE'
-      ? 'No Senior/PWD discount on this sale.'
-      : `${statutoryTypeLabel(card)} discount on this sale — 20% off ${eligibleCount} eligible item${eligibleCount === 1 ? '' : 's'}, VAT-exempt.`;
+      ? 'No statutory discount on this sale.'
+      : `${statutoryTypeLabel(card)} discount on this sale — ${ruleSummary(config, card).replace(' eligible items', '')} on ${cardCount} eligible item${cardCount === 1 ? '' : 's'}.`;
+  const typeOptions: { value: CardChoice; label: string }[] = [
+    { value: 'NONE', label: 'None' },
+    ...offered.map((t) => ({ value: t as CardChoice, label: t === 'SENIOR' ? 'Senior Citizen' : statutoryTypeLabel(t) })),
+  ];
 
   return (
     <Sheet
@@ -365,7 +402,7 @@ export function ClientDialog({
 
       {noDetails ? (
         <View>
-          <Banner kind="info" message="Walk-in client — no contact details are recorded, and no Senior/PWD discount." />
+          <Banner kind="info" message="Walk-in client — no contact details are recorded, and no statutory (Senior/PWD…) discount." />
           <SectionTitle>Name (optional)</SectionTitle>
           <View style={styles.row}>
             <TextField label="First name" value={first} onChangeText={setFirst} containerStyle={styles.cell} maxLength={100} />
@@ -379,30 +416,23 @@ export function ClientDialog({
             <Banner
               kind="info"
               title="Returning clients can’t be looked up"
-              message={`${unavailable} The sale is still linked to their record when the device checks in, by phone number or Senior/PWD ID.`}
+              message={`${unavailable} The sale is still linked to their record when the device checks in, by phone number or discount card ID.`}
               style={styles.banner}
             />
           ) : null}
 
-          {/* 1. Senior Citizen / PWD discount — part of this form, first: the card identifies the person. */}
+          {/* 1. Statutory discount — part of this form, first: the card identifies the person. */}
           <View style={[styles.scPanel, card !== 'NONE' && styles.scPanelOn]}>
-            <Text style={styles.scTitle}>Senior Citizen / PWD discount</Text>
-            {eligibleCount === 0 ? (
-              <Text style={styles.scExplain}>
-                20% off eligible items, VAT-exempt — but no item in the cart qualifies, so it can’t be used on this sale.
-              </Text>
+            <Text style={styles.scTitle}>{offered.length > 2 ? 'Statutory discount (Senior / PWD / other cards)' : 'Senior Citizen / PWD discount'}</Text>
+            {!anyEligible && card === 'NONE' ? (
+              <Text style={styles.scExplain}>No item in the cart qualifies for a statutory discount, so it can’t be used on this sale.</Text>
             ) : (
               <>
                 <Text style={styles.scExplain}>
-                  20% off eligible items, VAT-exempt. Choose the card type first, then enter the ID — the discount applies to
-                  this sale.
+                  Choose the card type first, then enter the ID — the discount applies to this sale’s eligible items.
                 </Text>
                 <Segmented<CardChoice>
-                  options={[
-                    { value: 'NONE', label: 'None' },
-                    { value: 'SENIOR', label: 'Senior Citizen' },
-                    { value: 'PWD', label: 'PWD' },
-                  ]}
+                  options={typeOptions}
                   value={card}
                   onChange={(v) => {
                     setCard(v);
@@ -426,7 +456,7 @@ export function ClientDialog({
                         containerStyle={styles.cell}
                         editable={!(locked && matchedVia === 'ID')}
                       />
-                      <TextField label="Issued by (LGU / OSCA / NCDA)" value={idIssuer} onChangeText={setIdIssuer} maxLength={100} containerStyle={styles.cell} />
+                      <TextField label={issuerLabel(card)} value={idIssuer} onChangeText={setIdIssuer} maxLength={100} containerStyle={styles.cell} />
                     </View>
                     {idNote ? <HintText>{idNote}</HintText> : null}
                     <View style={styles.row}>
@@ -438,9 +468,9 @@ export function ClientDialog({
                         keyboardType="numbers-and-punctuation"
                         containerStyle={styles.cell}
                       />
-                      {card === 'PWD' ? (
+                      {expiryLabel(card) ? (
                         <TextField
-                          label="ID expiry date *"
+                          label={expiryLabel(card)!}
                           value={expiryDate}
                           onChangeText={(t) => setExpiryDate(cleanDate(t))}
                           placeholder="YYYY-MM-DD"
@@ -451,6 +481,17 @@ export function ClientDialog({
                         <View style={styles.cell} />
                       )}
                     </View>
+                    {card === 'SOLO_PARENT' ? (
+                      <SoloParentFields
+                        bookletNumber={booklet}
+                        kids={children}
+                        rxInChildName={rxInChildName}
+                        rxLine={rxLineFor('SOLO_PARENT')}
+                        onBooklet={setBooklet}
+                        onKids={setChildren}
+                        onRxInChildName={setRxInChildName}
+                      />
+                    ) : null}
                     {dismissedIdHolder ? (
                       <Banner
                         kind="warning"
@@ -472,7 +513,7 @@ export function ClientDialog({
               <View style={{ flex: 1 }}>
                 <Text style={styles.matchLabel}>
                   Returning client
-                  {matchedVia === 'ID' ? ' · found by Senior/PWD ID' : matchedVia === 'PHONE' ? ' · found by phone number' : ''}
+                  {matchedVia === 'ID' ? ' · found by card ID' : matchedVia === 'PHONE' ? ' · found by phone number' : ''}
                 </Text>
                 <Text style={styles.matchName}>
                   {clientName(matched)}

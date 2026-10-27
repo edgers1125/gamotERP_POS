@@ -221,7 +221,32 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
       <WriteOnLine label="Address" value={data.customer_block.address} />
       <WriteOnLine label="TIN" value={data.customer_block.tin} />
       <WriteOnLine label={data.customer_block.id_label} value={data.customer_block.id_number} />
+      {data.solo_parent ? (
+        <>
+          <WriteOnLine label="SP Booklet No" value={data.solo_parent.booklet_number} />
+          {data.solo_parent.children.map((name, i) => (
+            <T key={i} style={{ marginTop: 1 * MM }}>Child: {name}</T>
+          ))}
+        </>
+      ) : null}
       <WriteOnLine label="Signature" value={null} />
+      {/* Several cards (Phase 2b): every further card in its own block with its own signature line. */}
+      {(data.statutory_cards ?? []).slice(1).map((card, i) => (
+        <View key={`${card.type}-${i}`} style={{ marginTop: 2 * MM }}>
+          <T style={bold}>{card.customer_type_label}</T>
+          <WriteOnLine label={card.id_label} value={card.id_number} />
+          <WriteOnLine label="Name" value={card.holder_name} />
+          {card.solo_parent ? (
+            <>
+              <WriteOnLine label="SP Booklet No" value={card.solo_parent.booklet_number} />
+              {card.solo_parent.children.map((name, j) => (
+                <T key={j} style={{ marginTop: 1 * MM }}>Child: {name}</T>
+              ))}
+            </>
+          ) : null}
+          <WriteOnLine label="Signature" value={null} />
+        </View>
+      ))}
 
       <Divider />
 

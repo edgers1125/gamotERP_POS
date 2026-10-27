@@ -239,6 +239,7 @@ export function ProductSearch({
           const unavailable = sellable.length === 0;
           const options = group.items.length;
           const scPwd = group.items.some((i) => i.sc_pwd_eligible);
+          const soloParent = group.items.some((i) => i.solo_parent_eligible === true);
           const priceText = min === null ? null : min === max ? formatPeso(min) : `${formatPeso(min)} – ${formatPeso(max!)}`;
           return (
             <Pressable
@@ -262,6 +263,7 @@ export function ProductSearch({
                   </Text>
                 )}
                 {scPwd ? <StatusBadge label="SC/PWD" tone="primary" /> : null}
+                {soloParent ? <StatusBadge label="Solo Parent" tone="primary" /> : null}
               </View>
               <Text style={[styles.tilePrice, unavailable && styles.tilePriceOff]} numberOfLines={1} adjustsFontSizeToFit>
                 {unavailable ? `No price at ${channelName}` : priceText}

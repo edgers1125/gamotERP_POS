@@ -7,10 +7,10 @@
 // module isn't built in (Expo Go) or no second display is connected.
 import PosDisplay from '../../modules/pos-display';
 import type { PosDisplayCartState, PosDisplayRow, PosDisplayThankYouState } from '../../modules/pos-display';
-import { cartTotals, chargedLineOf, isStatutoryLine, shownPrice, useCart, type CartState, type SaleClient } from '../sale/cart';
+import { cartTotals, chargedLineOf, lineCardType, shownPrice, statutoryDiscountRows, useCart, type CartState, type SaleClient } from '../sale/cart';
 import { amountDueOf, withholdingFigures } from '../sale/billing';
 import { formatPeso, round2 } from '../sale/money';
-import { statutoryTypeLabel } from '../sale/statutory';
+import { discountRowLabel } from '../sale/statutory';
 import { displayService } from './displayService';
 
 const THROTTLE_MS = 100;
@@ -31,7 +31,6 @@ function firstName(client: SaleClient): string | null {
 
 function cartState(s: CartState): PosDisplayCartState {
   const totals = cartTotals(s);
-  const statutoryLabel = s.statutory ? statutoryTypeLabel(s.statutory.type) : 'Senior/PWD';
   const lines = s.lines.map((l, i) => {
     const computed = totals.lines[i];
     const discounts: PosDisplayRow[] = [];
@@ -49,8 +48,9 @@ function cartState(s: CartState): PosDisplayCartState {
         value: formatPeso(-itemDiscount),
       });
     }
-    if (computed && isStatutoryLine(s, l) && computed.statutoryDiscountAmount > 0) {
-      discounts.push({ label: `${statutoryLabel} 20%`, value: formatPeso(-computed.statutoryDiscountAmount) });
+    const cardType = lineCardType(s, l);
+    if (computed && cardType !== null && computed.statutoryDiscountAmount > 0) {
+      discounts.push({ label: discountRowLabel(s.statutoryConfig, cardType), value: formatPeso(-computed.statutoryDiscountAmount) });
     }
     return {
       name: l.name,
@@ -64,7 +64,7 @@ function cartState(s: CartState): PosDisplayCartState {
   const rows: PosDisplayCartState['totals'] = [{ label: 'Subtotal', value: formatPeso(totals.subtotal), tone: 'normal' }];
   if (totals.totalItemDiscount > 0) rows.push({ label: 'Item discounts', value: formatPeso(-totals.totalItemDiscount), tone: 'discount' });
   if (totals.transactionDiscountAmount > 0) rows.push({ label: 'Sale discount', value: formatPeso(-totals.transactionDiscountAmount), tone: 'discount' });
-  if (totals.totalStatutoryDiscount > 0) rows.push({ label: `${statutoryLabel} 20%`, value: formatPeso(-totals.totalStatutoryDiscount), tone: 'discount' });
+  for (const r of statutoryDiscountRows(s, totals)) rows.push({ label: r.label, value: formatPeso(-r.amount), tone: 'discount' });
   if (totals.vatExemptSales > 0) rows.push({ label: 'VAT-exempt sales', value: formatPeso(totals.vatExemptSales), tone: 'muted' });
   rows.push({ label: totals.pricesIncludeVat ? 'VAT included (12%)' : 'VAT (12%)', value: formatPeso(totals.totalVat), tone: 'muted' });
 

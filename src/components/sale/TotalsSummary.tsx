@@ -20,13 +20,14 @@ export interface SaleDiscountControl {
 
 export function TotalsSummary({
   totals,
-  statutoryLabel,
+  statutoryRows,
   saleDiscount,
   saleDiscountValue,
   saleDiscountReason,
 }: {
   totals: SaleTotals;
-  statutoryLabel?: string;
+  /** One row per statutory card type discounting a line (cart `statutoryDiscountRows`: "SC 20%", "Solo Parent 10%"). */
+  statutoryRows?: { label: string; amount: number }[];
   /** Makes the sale-discount row editable (Sell screen). */
   saleDiscount?: SaleDiscountControl;
   /** Read-only display of the typed discount (Payment screen) — shows "(10%)" and the reason. */
@@ -96,9 +97,11 @@ export function TotalsSummary({
         </>
       ) : null}
 
-      {totals.totalStatutoryDiscount > 0 ? (
-        <SummaryRow label={`${statutoryLabel ?? 'Senior/PWD'} 20%`} value={formatPeso(-totals.totalStatutoryDiscount)} tone="success" />
-      ) : null}
+      {totals.totalStatutoryDiscount > 0
+        ? (statutoryRows && statutoryRows.length > 0 ? statutoryRows : [{ label: 'Statutory discount', amount: totals.totalStatutoryDiscount }]).map((r) => (
+            <SummaryRow key={r.label} label={r.label} value={formatPeso(-r.amount)} tone="success" />
+          ))
+        : null}
       {totals.vatExemptSales > 0 ? <SummaryRow label="VAT-exempt sales" value={formatPeso(totals.vatExemptSales)} tone="muted" /> : null}
       <SummaryRow label={totals.pricesIncludeVat ? 'VAT included (12%)' : 'VAT (12%)'} value={formatPeso(totals.totalVat)} tone="muted" />
       <SummaryRow label="Total" value={formatPeso(totals.grandTotal)} strong />

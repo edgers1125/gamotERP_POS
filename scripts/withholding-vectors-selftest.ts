@@ -13,7 +13,8 @@ import type { PosClientCompany } from '@pos-api/contract';
 import { computeCartTotals, NO_DISCOUNT, type SaleTotals } from '../src/sale/totals';
 import { amountDueOf, billingPayload, billingProblem, withholdingFigures, type BillToDraft } from '../src/sale/billing';
 
-type Line = { quantity: number; unitPrice: number; isVatable: boolean; itemDiscountAmount?: number; isStatutory?: boolean };
+// BIR Phase 2: a statutory line's rate (fraction) + VAT treatment (a NAAC line's base is VAT Sales).
+type Line = { quantity: number; unitPrice: number; isVatable: boolean; itemDiscountAmount?: number; isStatutory?: boolean; statutoryRate?: number; statutoryVatExempt?: boolean };
 type Vector = {
   name: string;
   type: WithholdingType;
@@ -53,6 +54,8 @@ for (const v of list) {
         unitPrice: l.unitPrice,
         isVatable: l.isVatable,
         isStatutory: l.isStatutory ?? false,
+        ...(l.statutoryRate !== undefined ? { statutoryDiscountRate: l.statutoryRate } : {}),
+        ...(l.statutoryVatExempt !== undefined ? { statutoryVatExempt: l.statutoryVatExempt } : {}),
         itemDiscount: l.itemDiscountAmount ? { value: String(l.itemDiscountAmount), mode: 'amount' } : NO_DISCOUNT,
       })),
       v.sale.transactionDiscount > 0 ? { value: String(v.sale.transactionDiscount), mode: 'amount' } : NO_DISCOUNT,

@@ -190,13 +190,25 @@ export function scPwdComparison(line: PromoLine): PromoScPwdComparison | null {
 
 export const PROMO_LAW_NOTE = 'By law the customer gets the better of the two — the promo or the Senior/PWD 20% — never both.';
 
+/** The law note for any card's discount ("the promo or the Solo Parent 10%"). */
+export function promoLawNote(discountName: string): string {
+  return `By law the customer gets the better of the two — the promo or the ${discountName} — never both.`;
+}
+
 /** The first line still waiting for the cashier's Promo-vs-SC/PWD choice (null = none). */
-export function promoChoiceProblem(lines: readonly PromoLine[], isStatutory: (l: PromoLine) => boolean): string | null {
+export function promoChoiceProblem(
+  lines: readonly PromoLine[],
+  isStatutory: (l: PromoLine) => boolean,
+  /** The line's discount as named to the cashier (default "Senior/PWD 20%"; e.g. "Solo Parent 10%"). */
+  discountName: (l: PromoLine) => string = () => 'Senior/PWD 20%',
+): string | null {
   const open = lines.filter((l) => needsPromoChoice(l, isStatutory(l)) && l.promoChoice === null);
   if (open.length === 0) return null;
+  const names = new Set(open.map(discountName));
+  const name = names.size === 1 ? [...names][0]! : 'the statutory discount';
   return open.length === 1
-    ? `Choose Promo or Senior/PWD 20% for ${open[0]!.name}.`
-    : `Choose Promo or Senior/PWD 20% for ${open.length} items (${open.map((l) => l.name).join(', ')}).`;
+    ? `Choose Promo or ${name} for ${open[0]!.name}.`
+    : `Choose Promo or ${name} for ${open.length} items (${open.map((l) => l.name).join(', ')}).`;
 }
 
 /** The promo fields of the sale line (contract SaleLinePayload) — none for a line without a promo (older servers too). */

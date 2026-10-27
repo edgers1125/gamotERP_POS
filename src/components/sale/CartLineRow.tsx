@@ -5,14 +5,17 @@
 // shows its subtotal struck through, the discount and the amount after it.
 // Store promo (src/sale/promos.ts): the regular price struck through, the promo price and a "Promo: <name>" chip. On a
 // Senior/PWD sale a promo line of an eligible item asks the cashier to choose Promo or SC/PWD 20% (both amounts shown,
-// the cheaper one for the customer marked; no default — Charge stays off until chosen).
+// the cheaper one for the customer marked; no default — Charge stays off until chosen). Same for every statutory card
+// type (BIR Phase 2: NAAC, Solo Parent, Medal of Valor — their own rate / VAT). With several cards on the sale (Phase
+// 2b) an eligible line shows which card it gets, as chips (cart `setLineCard`).
 import { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, spacing } from '../../ui/theme';
-import { shownPrice, useCart, type CartLine } from '../../sale/cart';
+import { shownPrice, useCart, type CartLine, type PromoCardComparison } from '../../sale/cart';
 import { formatPeso } from '../../sale/money';
-import { PROMO_LAW_NOTE, scPwdComparison, type ChargedLine, type PromoScPwdChoice } from '../../sale/promos';
+import { promoLawNote, type ChargedLine, type PromoScPwdChoice } from '../../sale/promos';
+import type { StatutoryType } from '../../sale/statutory';
 import { hasDiscount } from '../../sale/totals';
 import { StatusBadge } from './ui';
 
@@ -20,7 +23,10 @@ export function CartLineRow({
   line,
   charged,
   itemDiscountAmount,
-  statutory,
+  card,
+  comparison,
+  cardOptions,
+  onCardPick,
   available,
   onQuantity,
   onDiscount,
@@ -32,8 +38,14 @@ export function CartLineRow({
   /** What the line is charged (cart.ts chargedLineOf). */
   charged: ChargedLine;
   itemDiscountAmount: number;
-  /** This line gets the Senior/PWD 20% (no item discount allowed). */
-  statutory: boolean;
+  /** The statutory card this line gets (no item discount allowed) — null = none. label: "SC/PWD 20%", "Solo Parent 10%";
+   * name: how the choice reads ("Senior/PWD 20%"); vatExempt: the type's VAT treatment. */
+  card: { label: string; name: string; vatExempt: boolean } | null;
+  /** Promo line on a statutory sale: both amounts (cart `promoCardComparison`). */
+  comparison: PromoCardComparison | null;
+  /** Several cards on the sale: the cards this line may get (+ None) — undefined = no picker. */
+  cardOptions?: { value: StatutoryType | 'NONE'; label: string; selected: boolean }[];
+  onCardPick?: (pick: StatutoryType | 'NONE') => void;
   /** Unexpired on-shelf units (online hint), undefined when unknown. */
   available: number | undefined;
   onQuantity: (q: number) => void;
@@ -52,9 +64,9 @@ export function CartLineRow({
   const chargedShown = shownPrice({ pricesIncludeVat }, line, charged.unitPrice);
   const subtotal = line.quantity * chargedShown;
   const promo = line.promo;
-  // Senior/PWD sale + promo item: the cashier's choice (decision 6).
+  const statutory = card !== null;
+  // Statutory sale + promo item: the cashier's choice (decision 6).
   const choosing = statutory && promo !== null;
-  const comparison = choosing ? scPwdComparison(line) : null;
   const short = available !== undefined && line.quantity > available;
   const discounted = !statutory && hasDiscount(line.discount) && itemDiscountAmount > 0;
   const discountText = discounted
@@ -124,7 +136,7 @@ export function CartLineRow({
 
         {statutory ? (
           <StatusBadge
-            label={choosing ? (line.promoChoice === 'PROMO' ? 'Promo · VAT-exempt' : line.promoChoice === 'SCPWD' ? 'SC/PWD 20%' : 'Choose below') : 'SC/PWD 20%'}
+            label={choosing ? (line.promoChoice === 'PROMO' ? `Promo · ${card.vatExempt ? 'VAT-exempt' : 'VAT charged'}` : line.promoChoice === 'SCPWD' ? card.label : 'Choose below') : card.label}
             tone={choosing && line.promoChoice === null ? 'warning' : 'primary'}
             style={styles.sc}
           />
@@ -150,19 +162,36 @@ export function CartLineRow({
           <Text style={[styles.removeText, disabled && { color: c.disabled }]}>Remove</Text>
         </Pressable>
       </View>
-      {statutory && !choosing ? <Text style={styles.scNote}>Senior/PWD 20% applies — no other discount on this item.</Text> : null}
-      {choosing && comparison && promo ? (
+      {cardOptions && cardOptions.length > 0 ? (
+        <View style={styles.cardRow}>
+          <Text style={styles.cardRowLabel}>Card:</Text>
+          {cardOptions.map((o) => (
+            <Pressable
+              key={o.value}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: o.selected, disabled: !!disabled }}
+              disabled={disabled}
+              onPress={() => onCardPick?.(o.value)}
+              style={({ pressed }) => [styles.cardChip, o.selected && styles.cardChipOn, pressed && styles.pressed]}
+            >
+              <Text style={[styles.cardChipText, o.selected && { color: c.primary }]}>{o.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {card && !choosing ? <Text style={styles.scNote}>{card.name} applies — no other discount on this item.</Text> : null}
+      {card && choosing && comparison && promo ? (
         <View style={styles.choice}>
-          <Text style={styles.choiceTitle}>Promo or Senior/PWD 20%? — choose one</Text>
+          <Text style={styles.choiceTitle}>Promo or {card.name}? — choose one</Text>
           <View style={styles.choiceRow}>
             {(
               [
-                { key: 'PROMO', title: `Promo “${promo.name}”`, sub: `${formatPeso(promo.price)} each · VAT-exempt`, total: comparison.promo_total },
-                { key: 'SCPWD', title: 'Senior/PWD 20%', sub: `${formatPeso(line.unitPrice)} less 20% · VAT-exempt`, total: comparison.scpwd_total },
+                { key: 'PROMO', title: `Promo “${promo.name}”`, sub: `${formatPeso(promo.price)} each · ${card.vatExempt ? 'VAT-exempt' : 'VAT charged'}`, total: comparison.promoTotal },
+                { key: 'SCPWD', title: card.name, sub: `${formatPeso(line.unitPrice)} less ${card.label.replace(/^.* /, '')} · ${card.vatExempt ? 'VAT-exempt' : 'VAT charged'}`, total: comparison.cardTotal },
               ] as const
             ).map((o) => {
               const selected = line.promoChoice === o.key;
-              const better = comparison.better === o.key;
+              const better = comparison.better === (o.key === 'SCPWD' ? 'CARD' : o.key);
               return (
                 <Pressable
                   key={o.key}
@@ -187,7 +216,7 @@ export function CartLineRow({
             })}
           </View>
           {comparison.better === 'EQUAL' ? <Text style={styles.choiceNote}>Both come to the same amount.</Text> : null}
-          <Text style={styles.choiceNote}>{PROMO_LAW_NOTE}</Text>
+          <Text style={styles.choiceNote}>{promoLawNote(card.name)}</Text>
         </View>
       ) : null}
       {short ? (
@@ -253,6 +282,19 @@ const useStyles = makeStyles((c, t) => ({
   discText: { ...t.button, fontSize: 14, color: c.primary },
   sc: { alignSelf: 'center' },
   scNote: { ...t.caption, fontSize: 12, marginTop: spacing.xs },
+  cardRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
+  cardRowLabel: { ...t.caption },
+  cardChip: {
+    minHeight: 36,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.surface,
+    justifyContent: 'center',
+  },
+  cardChipOn: { borderColor: c.primary, backgroundColor: c.primarySoft },
+  cardChipText: { ...t.caption, fontFamily: t.bodyStrong.fontFamily },
   // marginLeft 'auto' keeps Remove at the right end of whichever line it lands on.
   remove: { marginLeft: 'auto', minHeight: 44, paddingHorizontal: spacing.md, borderRadius: radius.md, justifyContent: 'center' },
   removeText: { ...t.button, fontSize: 14, color: c.danger },

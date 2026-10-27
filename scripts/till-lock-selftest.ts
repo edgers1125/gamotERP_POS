@@ -88,6 +88,7 @@ const base = {
   txDiscount: { mode: 'AMOUNT', value: '' },
   txDiscountReason: '',
   statutory: null,
+  extraCards: [],
   note: '',
   channelId: 1,
   promos: [],
@@ -101,6 +102,7 @@ check('new promos array (heartbeat → bootstrap re-read) → no touch', !isUser
 check('stock hint / notice / catalog version → no touch', !isUserCartChange(base, patched({ stock: { 1: 3 }, notice: 'x', catalogVersion: 'v2' })));
 check('lines changed → touch', isUserCartChange(base, patched({ lines: [] })));
 check('Sold By picked → touch', isUserCartChange(base, patched({ soldById: 7 })));
+check('another statutory card added (Phase 2b) → touch', isUserCartChange(base, patched({ extraCards: [] })));
 check(
   'client / discount / reason / Senior-PWD / note / channel → touch',
   [{ client: { kind: 'WALK_IN' } }, { txDiscount: { mode: 'PERCENT', value: '5' } }, { txDiscountReason: 'loyal' }, { statutory: {} }, { note: 'n' }, { channelId: 2 }].every((p) =>

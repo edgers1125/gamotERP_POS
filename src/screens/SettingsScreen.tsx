@@ -16,6 +16,8 @@ import { serverConfig } from '../config/serverConfig';
 import type { EnrollmentState } from '../contracts';
 import { localStore } from '../db/localStore';
 import { syncEngine, useSyncStatus } from '../sync/syncEngine';
+import { ratePercentText, statutoryConfigOf, statutoryTypeLongLabel } from '../sale/statutory';
+import { STATUTORY_TYPES } from '@shared/statutory-rules';
 import { Banner, Button, Screen } from '../ui/components';
 import { makeStyles, useThemeColors } from '../ui/brandTheme';
 import { radius, shadow, spacing } from '../ui/theme';
@@ -114,6 +116,7 @@ export function SettingsScreen({ onReEnroll }: Props) {
   const onlineSession = cashier?.mode === 'ONLINE' && cashierSession.isOnlineSession();
   // An attendance-only tablet (docs/plans/attendance-pos-only.md): no catalog, invoice numbers, BIR details or cashier.
   const attendanceOnly = isAttendanceOnlyTerminal(terminal);
+  const statutory = statutoryConfigOf(bootstrap);
 
   return (
     <Screen title="Settings">
@@ -192,6 +195,29 @@ export function SettingsScreen({ onReEnroll }: Props) {
               <Text style={styles.note}>Not enrolled.</Text>
             )}
           </Group>
+          {attendanceOnly ? null : (
+            // The company's statutory discount rules (BIR Phase 2) — company settings, edited on the web (Settings →
+            // Statutory discounts, permission "Settings: Statutory discounts"); the tablet only shows what it applies.
+            <Group title="Statutory discounts">
+              {STATUTORY_TYPES.map((type) => {
+                const rule = statutory.rules[type];
+                const fixed = type === 'SENIOR' || type === 'PWD';
+                return (
+                  <Line
+                    key={type}
+                    label={statutoryTypeLongLabel(type)}
+                    value={rule.enabled ? `${ratePercentText(rule.ratePercent)} · ${rule.vatExempt ? 'VAT-exempt' : 'VAT charged'}${fixed ? ' (fixed by law)' : ''}` : 'Off'}
+                  />
+                );
+              })}
+              <Line label="Cards per sale" value={statutory.oneTypePerSale ? 'One statutory discount per sale' : 'Up to one card per type'} />
+              <Text style={styles.footnote}>
+                {statutory.known
+                  ? 'Company settings — change them on the web: Settings → Statutory discounts. New sales use them after the next check-in.'
+                  : 'The server hasn’t sent statutory discount settings yet — Senior / PWD only.'}
+              </Text>
+            </Group>
+          )}
           {attendanceOnly ? null : (
           <Group title="Cashier">
             <Line label="Signed in" value={cashier ? `${cashier.name} (${cashier.mode === 'ONLINE' ? 'password' : 'PIN'})` : '—'} />

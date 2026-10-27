@@ -70,7 +70,7 @@ export function backgroundLockDue(backgroundSince: ClockStamp | null, now: Clock
  * themselves (bootstrap / catalog / stock refreshes) and must never restart the idle timer. */
 export type CartActivitySlice = Pick<
   CartState,
-  'lines' | 'client' | 'soldById' | 'txDiscount' | 'txDiscountReason' | 'statutory' | 'note' | 'channelId'
+  'lines' | 'client' | 'soldById' | 'txDiscount' | 'txDiscountReason' | 'statutory' | 'extraCards' | 'note' | 'channelId'
 >;
 
 const ACTIVITY_KEYS: readonly (keyof CartActivitySlice)[] = [
@@ -80,6 +80,7 @@ const ACTIVITY_KEYS: readonly (keyof CartActivitySlice)[] = [
   'txDiscount',
   'txDiscountReason',
   'statutory',
+  'extraCards',
   'note',
   'channelId',
 ];

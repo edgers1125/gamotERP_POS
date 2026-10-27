@@ -18,7 +18,7 @@ import { useCashier } from '../auth/cashierSession';
 import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, shownPrice, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, lineCardInfo, rxLinesOf, saleCards, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
 import { amountDueOf, withholdingFigures } from '../sale/billing';
 import { checkCartPrescription, completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
@@ -53,7 +53,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
   const doctors = useDoctors((s) => s.items);
   const wide = useWindowDimensions().width >= 720;
 
-  const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory]); // eslint-disable-line react-hooks/exhaustive-deps
+  const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory, cart.extraCards, cart.statutoryConfig]); // eslint-disable-line react-hooks/exhaustive-deps
   // "Bill to company" (BIR Phase 1): the buyer withholds part of the total — the payments, tender and change are against
   // the AMOUNT DUE (grand total − withholding); with no company it IS the grand total.
   const billing = useMemo(() => withholdingFigures(totals, cart.billTo, cart.pricesIncludeVat), [totals, cart.billTo, cart.pricesIncludeVat]);
@@ -153,18 +153,20 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
       <View style={styles.meta}>
         <Text style={styles.metaText}>Client: {saleClientName(cart) ?? 'Walk-in'}</Text>
         {cart.billTo ? <Text style={styles.metaText}>Billed to: {cart.billTo.company.name}</Text> : null}
-        {cart.statutory ? (
-          <Text style={styles.metaText}>
-            {statutoryTypeLabel(cart.statutory.type)} ID {cart.statutory.idNumber}
+        {saleCards(cart).map((card) => (
+          <Text key={card.type} style={styles.metaText}>
+            {statutoryTypeLabel(card.type)} ID {card.idNumber}
+            {card === cart.statutory ? '' : ` · ${[card.firstName, card.lastName].join(' ').trim()}`}
+            {card.type === 'SOLO_PARENT' && card.children.length > 0 ? ` · for ${card.children.map((ch) => ch.name.trim()).join(', ')}` : ''}
           </Text>
-        ) : null}
+        ))}
         {cart.rx ? <Text style={styles.metaText}>{rxSummary}</Text> : null}
         <Text style={styles.metaText}>Cashier: {cashier?.name ?? '—'}</Text>
         <Text style={styles.metaText}>Sold by: {data.bootstrap?.sales_staff.find((s) => s.id === cart.soldById)?.name ?? '—'}</Text>
       </View>
       <TotalsSummary
         totals={totals}
-        statutoryLabel={cart.statutory ? statutoryTypeLabel(cart.statutory.type) : undefined}
+        statutoryRows={statutoryDiscountRows(cart, totals)}
         saleDiscountValue={cart.txDiscount}
         saleDiscountReason={cart.txDiscountReason}
       />
@@ -196,7 +198,8 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
           <ScrollView style={styles.flex}>
             {cart.lines.map((l, idx) => {
               const charged = chargedLineOf(cart, l);
-              const choice = isStatutoryLine(cart, l) && l.promo ? l.promoChoice : null;
+              const card = lineCardInfo(cart, l);
+              const choice = card && l.promo ? l.promoChoice : null;
               return (
               <View key={l.skuId} style={styles.orderLine}>
                 <View style={styles.flex}>
@@ -206,10 +209,11 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
                   {charged.promoApplied && l.promo ? (
                     <Text style={styles.orderPromo}>
                       Promo: {l.promo.name} · <Text style={styles.struck}>{formatPeso(shownPrice(cart, l, l.unitPrice))}</Text> {formatPeso(shownPrice(cart, l, charged.unitPrice))} each
-                      {choice === 'PROMO' ? ' · chosen over SC/PWD 20%' : ''}
+                      {choice === 'PROMO' && card ? ` · chosen over ${card.label}` : ''}
                     </Text>
                   ) : null}
-                  {choice === 'SCPWD' && l.promo ? <Text style={styles.orderPromo}>SC/PWD 20% chosen over the promo “{l.promo.name}”</Text> : null}
+                  {choice === 'SCPWD' && l.promo && card ? <Text style={styles.orderPromo}>{card.label} chosen over the promo “{l.promo.name}”</Text> : null}
+                  {card && saleCards(cart).length > 1 ? <Text style={styles.orderPromo}>{card.label}</Text> : null}
                 </View>
                 <View style={styles.orderAmounts}>
                   <Text style={styles.orderAmount}>{formatPeso(totals.lines[idx]?.lineSubtotal ?? 0)}</Text>

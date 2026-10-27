@@ -69,7 +69,7 @@ export function withholdingFigures(totals: SaleTotals, bill: BillToDraft | null,
   if (!bill) return null;
   const rates = ratesOf(bill);
   const vatableBase = withholdingVatableBase(
-    totals.lines.map((l) => ({ taxableBase: l.taxableBase, isVatable: l.isVatable, isStatutory: l.isStatutory })),
+    totals.lines.map((l) => ({ taxableBase: l.taxableBase, isVatable: l.isVatable, isStatutory: l.isStatutory, statutoryVatExempt: l.statutoryVatExempt })),
     { sellerVatRegistered },
   );
   const amounts = computeWithholding({ grandTotal: totals.grandTotal, totalVat: totals.totalVat, vatableBase }, rates);
