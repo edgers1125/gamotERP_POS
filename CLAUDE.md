@@ -27,6 +27,7 @@ offline** and syncs to the GamotERP backend.
 | `docs/claude/license.md` | License lease | touching the license lease, pinned keys, LOCKED / expired-lease selling blocks (src/license, src/db/policy.ts) |
 | `docs/claude/cash-drawer.md` | Cash drawer | touching the cash drawer, expected cash, the selling gate (src/drawer, CashDrawerScreen, localStore drawer ops) |
 | `docs/claude/till-lock.md` | Cashier vs Sold By + till auto-lock | touching Cashier / Sold By, the receipt staff line, idle / background lock, tillTouch (src/auth/tillLock*, SoldByDialog, cart.ts) |
+| `docs/claude/prescriptions.md` | Prescription (Rx) step | touching the Rx step, doctors cache, Rx payload / checks (src/sale/prescription.ts, doctors.ts, PrescriptionScreen, src/components/rx) |
 | `docs/claude/promos.md` | Store promos | touching store promos, promo price / Senior-PWD choice, promo payload fields (src/sale/promos.ts, cart.ts, PaymentScreen) |
 | `docs/claude/attendance-kiosk.md` | Attendance kiosk mode | touching the attendance kiosk, attendance-only tablets, liveness, the punch queue (src/attendance, modules/pos-face, AttendanceKioskScreen) |
 | `docs/claude/dev-setup.md` | Enrolling a device; Server URLs on the office Wi-Fi; Expo Go preview mode | setting up a dev device, changing server URLs, or touching any Expo Go fallback (isExpoGo, softwareDeviceKey, expoGoSqlite) |
