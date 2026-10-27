@@ -5,7 +5,7 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
 ## File map
 
 - `src/attendance/liveness.ts` — pure challenge evaluator
-- `src/attendance/punch.ts` — payload, checks, queue serialisation
+- `src/attendance/punch.ts` — payload, checks, queue serialisation, punch kinds + the punch-order rule
 - `src/attendance/attendanceKiosk.ts` — kiosk on/off + employee cache, signed punch queue, upload
 - `src/components/attendance/LivenessCapture.tsx`, `src/components/attendance/PinPad.tsx`
 - `src/screens/AttendanceKioskScreen.tsx` — the kiosk screen
@@ -48,8 +48,8 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   they show as "Not accepted" for HR to enter by hand. A revoked device can't upload them either (401), so Settings
   doesn't block re-enroll — its confirmation states the count (`unsentPunchCount`) and what happens.
 - **Punch kinds** (app 1.3.0, user "go build" 2026-10-22; GamotERP `lib/attendance/countable.ts` = THE rule, mirrored in
-  `punch.ts` because that file imports Prisma): Time in / Time out, **Break out / Break in** (lunch, everyone — not
-  counted) and **Transport out / Transport in** (travel between branches, counted) ONLY for `multi_branch` employees
+  `punch.ts` because that file imports Prisma): Time in / Time out, **Start break / End break** (lunch, everyone — not
+  counted) and **Transport Start / Transport End** (travel between branches, counted) ONLY for `multi_branch` employees
   (`punchKindsFor`; absent = false). Suggested (big button) = `suggestedKindOf`: BREAK_IN after BREAK_OUT, TRANSPORT_IN
   after TRANSPORT_OUT (multi-branch), else the server's `suggested_kind`; every other allowed kind is a smaller button
   below. After a punch the cached entry follows (`afterPunch`: `last_kind` = the punch, `suggested_kind` OUT when still on
@@ -58,6 +58,17 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   REJECTED. `attendance_punches.kind` CHECK widened by local migration v5. **Release: backend first** — against an older server (no
   `last_kind` / `multi_branch`, IN/OUT-only schema) the break buttons still show but the PIN step refuses a break punch
   (400, shown) and an OFFLINE break punch comes back REJECTED at upload (400, kept as "Not accepted"); IN/OUT keep working. Older apps (≤ 1.2.0) against the new server: unchanged (IN/OUT only).
+- **Punch ORDER** (app 1.4.x, branch `feature/attendance-punch-order`; server: GamotERP `docs/plans/attendance-punch-order.md`, `lib/attendance/punch-order.ts` = THE rule, mirrored ONCE in `punch.ts` `allowedKindsAfter`; judged at `punchRuleNow(Date.now(), serverClock.offsetMsSync())` = the SAME server-corrected clock the punch is stamped with (`serverClock.nowMs()`), never the raw device clock — a tablet with a wrong date gets the server's buttons; self-test "clock:" cases):
+  OFF (none / OUT / last punch older than 16 h) → IN only; WORKING (IN / BREAK_IN / TRANSPORT_IN) → OUT, BREAK_OUT,
+  TRANSPORT_OUT (multi-branch only); ON_BREAK → BREAK_IN only; IN_TRANSPORT → TRANSPORT_IN only. The kiosk's kind step
+  shows ONLY the allowed buttons (`allowedKindsFor`; big button = `suggestedAmong`). "Last known state" = the employee's
+  cached `punch_state` (server list: last_kind + since) advanced by this tablet's own punches: `afterPunch` after each
+  save, and `withLocalPunches` on every list refresh (this tablet's PENDING **and RECORDED (last 24 h)** queue rows NEWER than the server's `since` are re-applied — `ownPunchesForRefresh`, read INSIDE `withCacheLock` after the list — so neither an unsent punch nor one uploaded between the list read and the queue read is lost; `flipSuggestion` runs under the same lock on the latest store state). The state is re-judged with the device clock at render time, so a shift open > 16 h
+  offers IN again offline (grid line also reads off). Limit = the list's `open_shift_limit_hours` (`openShiftLimitOf`, default 16), cached inside `kiosk_json`, held in the store as `openShiftLimitHours` and passed to `allowedKindsFor` / `afterPunch` / `withLocalPunches` / `workStatusOf`. The PIN-step request also carries `unsent_punches` (this employee's PENDING punches, oldest first, max 20: `{kind, device_time}`; `unsentPunchesForEmployee`) so a queued Start break doesn't cause a 409 loop (additive server field; typed locally in `contracts.ts`). Online 409 `PUNCH_OUT_OF_ORDER` at the PIN step → the server's message on the kind
+  step + list re-read (the cached state follows). An OFFLINE punch is always uploaded; the server flags a misfit
+  `OUT_OF_ORDER` (never refused). **Older server** (no `punch_state` on the list) → every kind shown as before (the PIN
+  step then gets the 409 on a bad order, handled the same way). Self-test covers every transition, the 16 h rule, night / split
+  shift, transport for single-branch, local queue newer than the synced state.
 - **Flow** (`src/screens/AttendanceKioskScreen.tsx`): name grid (initials, search) → the kind (above) → PIN pad **online only** (`POST
   /pos/attendance/pin` → ticket + the server's challenge; not set up → "ask HR", no punch; a network failure here →
   continues offline; 403 `SUBSCRIPTION_LOCKED` → paused, see Lock) → camera (`LivenessCapture`) → saved + sent → "Time in recorded 8:02 AM" → list after 5 s. Idle
@@ -101,4 +112,4 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   module is absent: punches are recorded without photos (`ENGINE_FAILED`). Kotlin compile check:
   `cd android && ./gradlew :pos-face:compileDebugKotlin`.
 - Self-test: `../GamotERP/apps/pharma/backend/node_modules/.bin/tsx --tsconfig ./tsconfig.json scripts/attendance-selftest.ts`
-  (evaluator with made-up face data, payload / queue serialisation, punch kinds + suggestion + offline flip, the discarded online refusal, wording).
+  (evaluator with made-up face data, payload / queue serialisation, punch kinds + suggestion + offline flip, punch order, the discarded online refusal, wording).

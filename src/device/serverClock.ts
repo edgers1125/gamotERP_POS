@@ -145,6 +145,13 @@ export const serverClock = {
     return Date.now() + offsetMs;
   },
 
+  /** The offset nowMs() adds (server − device, ms) for a render that can't await — the clock attendance punches are
+   * stamped with. Loaded by the first backend call (0 before that). The punch ORDER buttons use it (punch.ts
+   * punchRuleNow), so a tablet with a wrong date judges the 16 h rule on the server's time. */
+  offsetMsSync(): number {
+    return offsetMs;
+  },
+
   /** The current offset (server − device, ms) — for diagnostics. */
   async offsetMs(): Promise<number> {
     await load();
