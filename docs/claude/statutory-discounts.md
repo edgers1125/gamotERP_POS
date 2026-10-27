@@ -2,7 +2,7 @@
 
 Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (gamotERP_POS).
 Contract: GamotERP `apps/pharma/docs/plans/bir-statutory-discounts-contract.md` (§2b several cards, §5 POS, §6 receipt);
-plan: `docs/plans/bir-pos-accreditation.md` Phase 2 / 2b, decisions D7, D11. App **1.6.0** (versionCode 6).
+plan: `docs/plans/bir-pos-accreditation.md` Phase 2 / 2b, decisions D7, D11. App **1.6.0** (versionCode 7 — 1.5.1 takes 6).
 
 ## File map
 
