@@ -31,6 +31,11 @@ import type {
   PosCatalog,
   PosClient,
   PosClientCompany,
+  PosFillPrescriptionDoctorResponse,
+  PosOpenPrescription,
+  PosPrescriptionCheckRequest,
+  PosPrescriptionCheckResponse,
+  PosPrescriptionDoctor,
   PosDisplayConfig,
   PosDisplayImage,
   PosBrand,
@@ -102,7 +107,7 @@ function emitLicenseFromResponse(spec: RequestSpec, body: unknown): void {
 }
 
 interface RequestSpec {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH';
   path: string; // e.g. "/pos/bootstrap"
   query?: Record<string, string | undefined>;
   body?: unknown;
@@ -211,7 +216,7 @@ function toApiError(status: number, body: unknown): ApiError {
   if (code === 'APP_UPDATE_REQUIRED') {
     return new AppUpdateRequiredError(status, message, typeof b.min_app_version === 'string' ? b.min_app_version : null);
   }
-  return new ApiError(status, message, code, fieldErrors);
+  return new ApiError(status, message, code, fieldErrors, details);
 }
 
 async function send<T>(spec: RequestSpec, retried = false): Promise<T> {
@@ -384,6 +389,31 @@ export const api: PosApi = {
   async approvers(kind: PosApprovalKind) {
     const res = await send<unknown>({ method: 'GET', path: '/pos/approvers', query: { kind }, auth: 'cashier' });
     return asArray<PosApprover>(res, 'approver');
+  },
+
+  async prescriptionDoctors() {
+    const res = await send<unknown>({ method: 'GET', path: '/pos/prescription-doctors', auth: 'cashier', timeoutMs: LONG_TIMEOUT_MS });
+    if (!isRecord(res) || typeof res.version !== 'string' || !Array.isArray(res.items)) {
+      throw new ApiError(502, 'The server sent an unexpected doctors list');
+    }
+    return { version: res.version, truncated: res.truncated === true, items: res.items as PosPrescriptionDoctor[] };
+  },
+
+  async createPrescriptionDoctor(body) {
+    return send<PosPrescriptionDoctor>({ method: 'POST', path: '/pos/prescription-doctors', body, auth: 'cashier' });
+  },
+
+  async fillPrescriptionDoctor(id, body) {
+    return send<PosFillPrescriptionDoctorResponse>({ method: 'PATCH', path: `/pos/prescription-doctors/${id}/fill-missing`, body, auth: 'cashier' });
+  },
+
+  async openPrescriptions(clientId) {
+    const res = await send<unknown>({ method: 'GET', path: `/pos/clients/${clientId}/open-prescriptions`, auth: 'cashier' });
+    return asArray<PosOpenPrescription>(res, 'open prescription');
+  },
+
+  async checkPrescription(body: PosPrescriptionCheckRequest) {
+    return send<PosPrescriptionCheckResponse>({ method: 'POST', path: '/pos/prescriptions/check', body, auth: 'cashier' });
   },
 
   async stock(skuIds) {

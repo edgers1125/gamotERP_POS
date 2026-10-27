@@ -14,6 +14,7 @@ import { shownUnitPrice } from '@shared/vat-inclusive';
 import { billingProblem, type BillToDraft } from './billing';
 import { isMoneyText, round2 } from './money';
 import { statutoryClientConflict, statutoryProblem, type StatutoryDraft } from './statutory';
+import { cartNeedsRx, RX_WALK_IN_REASON, type RxDraft, type RxLineInput } from './prescription';
 import {
   chargedLine,
   promoChoiceProblem,
@@ -37,6 +38,12 @@ export interface CartLine {
   unitPrice: number;
   isVatable: boolean;
   scPwdEligible: boolean;
+  /** The SKU's product model (null = none) and its name — a prescription covers models, counted in pieces. */
+  modelId: number | null;
+  modelName: string;
+  /** Prescription-only / dangerous drug (catalog flags; absent on an old cached catalog = false). */
+  rxRequired: boolean;
+  dangerousDrug: boolean;
   quantity: number;
   discount: DiscountDraft;
   /** The store promo pricing this line (null = none). */
@@ -84,6 +91,8 @@ export interface CartState {
   client: SaleClient;
   /** "Bill to company" (BIR Phase 1): the buyer company + its withholding, picked on the Payment screen (online only). */
   billTo: BillToDraft | null;
+  /** The Rx step's prescription (src/sale/prescription.ts; null = none entered). Per sale. */
+  rx: RxDraft | null;
   soldById: number | null;
   note: string;
   /** One-off message for the cashier (re-pricing, dropped items). */
@@ -106,6 +115,7 @@ export interface CartState {
   setStatutory(draft: StatutoryDraft | null): void;
   setClient(client: SaleClient): void;
   setBillTo(billTo: BillToDraft | null): void;
+  setRx(rx: RxDraft | null): void;
   setSoldBy(userId: number | null): void;
   setNote(note: string): void;
   setNotice(notice: string | null): void;
@@ -155,6 +165,7 @@ function repriced(lines: CartLine[], catalog: PosCatalog | null, channelId: numb
           unitPrice: Number(price),
           isVatable: item.is_vatable,
           scPwdEligible: item.sc_pwd_eligible,
+          ...rxFieldsOf(item),
         },
         promos,
         new Date(),
@@ -172,6 +183,7 @@ const EMPTY = {
   statutory: null,
   client: { kind: 'UNSET' } as SaleClient,
   billTo: null as BillToDraft | null,
+  rx: null as RxDraft | null,
   note: '',
   notice: null,
   stock: {} as Record<number, number>,
@@ -234,6 +246,7 @@ export const useCart = create<CartState>()((set, get) => ({
       unitPrice: Number(price),
       isVatable: item.is_vatable,
       scPwdEligible: item.sc_pwd_eligible,
+      ...rxFieldsOf(item),
       quantity: 1,
       discount: NO_DISCOUNT,
       promo: null,
@@ -277,11 +290,17 @@ export const useCart = create<CartState>()((set, get) => ({
     set({ statutory: draft });
   },
 
+  // An open prescription being filled belongs to its client: another client drops it (a new one is kept — it names no client).
   setClient(client) {
-    set({ client });
+    const rx = get().rx;
+    const keepRx = rx?.mode !== 'FILL' || (client.kind === 'EXISTING' && client.client.id === rx.clientId);
+    set(keepRx ? { client } : { client, rx: null });
   },
   setBillTo(billTo) {
     set({ billTo });
+  },
+  setRx(rx) {
+    set({ rx });
   },
   setSoldBy(userId) {
     set({ soldById: userId });
@@ -420,6 +439,8 @@ export function cartProblem(state: CartState, totals: SaleTotals): string | null
   if (state.channelId === null) return 'Choose the pricing channel.';
   if (state.lines.length === 0) return 'Add at least one item.';
   if (state.soldById === null) return 'Choose who sold it (Sold By).';
+  // A prescription item needs the patient as the client (docs/plans/pos-rx-step.md) — never "No client details".
+  if (cartNeedsRx(rxLinesOf(state)) && (state.client.kind === 'WALK_IN' || state.client.kind === 'UNSET')) return RX_WALK_IN_REASON;
   if (state.client.kind === 'UNSET' && !state.statutory) return 'Add the client — or tap “No client details”.';
   const d = discountProblem(state, totals);
   if (d) return d;
@@ -443,6 +464,29 @@ export function cartProblem(state: CartState, totals: SaleTotals): string | null
   if (billing) return billing;
   if (state.note.trim().length > 500) return 'The note must be 500 characters or fewer.';
   return null;
+}
+
+function rxFieldsOf(item: PosCatalogItem): Pick<CartLine, 'modelId' | 'modelName' | 'rxRequired' | 'dangerousDrug'> {
+  return {
+    modelId: item.model_id ?? null,
+    modelName: item.model_name || item.final_name,
+    rxRequired: item.rx_required === true,
+    dangerousDrug: item.is_dangerous_drug === true,
+  };
+}
+
+/** The cart lines as the Rx rules see them (all lines, cart order — the check request's `lines` index). */
+export function rxLinesOf(state: Pick<CartState, 'lines'>): RxLineInput[] {
+  return state.lines.map((l) => ({
+    skuId: l.skuId,
+    name: l.name,
+    quantity: l.quantity,
+    packQuantity: l.packQuantity,
+    modelId: l.modelId,
+    modelName: l.modelName,
+    rxRequired: l.rxRequired,
+    dangerous: l.dangerousDrug,
+  }));
 }
 
 export function newClientUuid(): string {

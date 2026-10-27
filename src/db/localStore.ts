@@ -25,6 +25,7 @@ import type {
   PosCounters,
   PosDisplayImage,
   PosPaymentMethod,
+  PosPrescriptionDoctorList,
   PosTerminalInfo,
   SalePayload,
   SyncOp,
@@ -75,6 +76,9 @@ const counterLock = new Mutex();
 const META_REVOKED = 'revoked';
 const META_UPDATE_REQUIRED = 'update_required';
 const META_APPROVERS_VERSION = 'approvers_version';
+// The doctors list of the Rx step (GET /pos/prescription-doctors, src/sale/doctors.ts): the whole list + its version as
+// one JSON value (≤ 5,000 doctors). Company data → cleared on (re-)enroll, like the approvers.
+const META_DOCTORS = 'doctors_cache';
 // The `bootstrap_version` of the last bootstrap saved (real-time `versions.terminal`); absent = unknown.
 const META_BOOTSTRAP_VERSION = 'bootstrap_version';
 // Brand cache (src/ui/brandSource.ts): one row per cashier + one per logo checksum, in the key/value meta table.
@@ -442,6 +446,9 @@ export interface LocalStoreExtras {
   /** The server's approvers version (real-time channel) the cached approver lists match; null = unknown. */
   getApproversVersion(): Promise<string | null>;
   setApproversVersion(version: string | null): Promise<void>;
+  /** The cached doctors list of the Rx step (null = never fetched) and its replacement (src/sale/doctors.ts). */
+  getDoctors(): Promise<(PosPrescriptionDoctorList & { saved_at: string }) | null>;
+  saveDoctors(list: PosPrescriptionDoctorList): Promise<void>;
   /** The `bootstrap_version` of the cached bootstrap (real-time `versions.terminal`); null = unknown (none cached, or
    * the server didn't send one). Written by `saveBootstrap`. */
   getBootstrapVersion(): Promise<string | null>;
@@ -511,11 +518,12 @@ export const localStore: LocalStore & LocalStoreExtras = {
             'INSERT OR REPLACE INTO counters (id, next_invoice_number, next_return_number, updated_at) VALUES (1, ?, ?, ?)',
             [counters.next_invoice_number, counters.next_return_number, now],
           );
-          await tx.execute('DELETE FROM meta WHERE key IN (?, ?, ?, ?)', [
+          await tx.execute('DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?)', [
             META_REVOKED,
             META_UPDATE_REQUIRED,
             META_APPROVERS_VERSION,
             META_BOOTSTRAP_VERSION,
+            META_DOCTORS,
           ]);
           await resetLicenseForEnrollment(tx);
         }),
@@ -533,11 +541,12 @@ export const localStore: LocalStore & LocalStoreExtras = {
           for (const t of ['enrollment', 'counters', 'bootstrap_cache', 'catalog_cache', 'catalog_items', 'catalog_barcodes', 'approvers', 'pin_verifiers']) {
             await tx.execute(`DELETE FROM ${t}`);
           }
-          await tx.execute('DELETE FROM meta WHERE key IN (?, ?, ?, ?)', [
+          await tx.execute('DELETE FROM meta WHERE key IN (?, ?, ?, ?, ?)', [
             META_REVOKED,
             META_UPDATE_REQUIRED,
             META_APPROVERS_VERSION,
             META_BOOTSTRAP_VERSION,
+            META_DOCTORS,
           ]);
           await tx.execute('DELETE FROM meta WHERE key = ?', [META_INACTIVE]);
           await resetLicenseForEnrollment(tx);
@@ -632,6 +641,21 @@ export const localStore: LocalStore & LocalStoreExtras = {
         ? conn.execute('DELETE FROM meta WHERE key = ?', [META_APPROVERS_VERSION])
         : conn.execute('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [META_APPROVERS_VERSION, version]),
     );
+  },
+
+  async getDoctors() {
+    const v = await withDb((conn) => readMeta(conn, META_DOCTORS));
+    if (v === null) return null;
+    try {
+      return JSON.parse(v) as PosPrescriptionDoctorList & { saved_at: string };
+    } catch {
+      return null;
+    }
+  },
+
+  async saveDoctors(list) {
+    const value = JSON.stringify({ version: list.version, truncated: list.truncated, items: list.items, saved_at: new Date().toISOString() });
+    await withDb((conn) => conn.execute('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [META_DOCTORS, value]));
   },
 
   async searchCatalog(query, limit = 50) {

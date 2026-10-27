@@ -21,7 +21,8 @@
 //   no update required, not subscription-locked, network up and the app in the foreground. While it is CONNECTED (`live`) the heartbeat and
 //   the 15-min bootstrap polling are skipped — the server's `state` / `changed` notices drive the refreshes instead
 //   (catalog → catalog download, display → displayService.refresh, approvers → the three lists, terminal →
-//   bootstrap, compared against the stored `bootstrap_version`). When it drops, today's polling resumes as the fallback (first heartbeat ~60 s after the drop).
+//   bootstrap, compared against the stored `bootstrap_version`, doctors → the Rx step's doctors list, src/sale/doctors.ts —
+//   opt-in: the hello always sends `versions.doctors`). When it drops, today's polling resumes as the fallback (first heartbeat ~60 s after the drop).
 //   Outbox pushing (POST /pos/sync) is the same either way.
 import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
@@ -46,6 +47,7 @@ import { cashierSession } from '../auth/cashierSession';
 import type { SyncEngine, SyncStatus } from '../contracts';
 import { onLocalStoreEvent } from '../db/events';
 import { displayService } from '../display/displayService';
+import { doctorsCache } from '../sale/doctors';
 import { ensureReceiptLogo } from '../sale/receiptAssets';
 import { localStore } from '../db/localStore';
 import {
@@ -494,6 +496,8 @@ realtime.configure({
         display: await displayService.cachedVersion(),
         approvers: await localStore.getApproversVersion().catch(() => null),
         terminal: await localStore.getBootstrapVersion().catch(() => null),
+        // Opt-in to 'doctors' notices (null until first fetched); an attendance-only tablet never sells, so it doesn't ask.
+        ...(attendanceOnlyTerminal ? {} : { doctors: await doctorsCache.cachedVersion().catch(() => null) }),
       },
     };
   },
@@ -525,6 +529,7 @@ realtime.configure({
     }
     await refreshDisplayIfDifferent(state.versions.display);
     await refreshApproversIfDifferent(state.versions.approvers);
+    if (!attendanceOnlyTerminal) await doctorsCache.refreshIfDifferent(state.versions.doctors);
   },
 
   async onChanged(msg: RealtimeChanged) {
@@ -546,6 +551,9 @@ realtime.configure({
         break;
       case 'approvers':
         await refreshApproversIfDifferent(msg.version);
+        break;
+      case 'doctors':
+        if (!attendanceOnlyTerminal) await doctorsCache.refreshIfDifferent(msg.version);
         break;
       case 'terminal':
         // Skipped only when the cached bootstrap provably matches; a notice without a version always re-reads.
@@ -632,9 +640,11 @@ async function runCycle(): Promise<boolean> {
       // Manual "Sync now": display + approvers are cheap to re-check too (each fetches only what changed / is small).
       await displayService.refresh();
       await refreshApprovers(true);
+      if (!attendanceOnlyTerminal) await doctorsCache.refresh();
     } else if (approversTarget !== null && Date.now() - approversTriedAt >= APPROVERS_RETRY_MS) {
       await refreshApprovers(false); // a notice arrived while no cashier was signed in online
     }
+    if (!check && !attendanceOnlyTerminal && doctorsCache.retryDue()) await doctorsCache.refresh(); // same for the doctors list
     if (contacted) await clearInactive();
     if (contacted) setStatus({ lastError: null, lastSyncAt: new Date().toISOString() });
     // A live real-time socket is server contact too (its hello/state replace the heartbeat).

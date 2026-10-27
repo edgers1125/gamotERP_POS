@@ -1,7 +1,7 @@
 // Records the sale: builds the SalePayload from the cart + tender and hands it to `localStore.recordSale`, which takes
 // the device's next invoice number, signs and saves the sale and enqueues its SALE op in ONE local transaction (so a
 // printed number is never lost, reused or skipped). Then a sync is kicked off (fire and forget — offline is fine).
-import type { PosApprovalKind, PosApprover, PosClockReport, PosPaymentMethod, SaleClientPayload, SaleLinePayload, SalePayload } from '@pos-api/contract';
+import type { PosApprovalKind, PosApprover, PosClockReport, PosPaymentMethod, PosRxIssue, SaleClientPayload, SaleLinePayload, SalePayload } from '@pos-api/contract';
 import { normalizePhone } from '@shared/phone';
 import type { LocalSale } from '../contracts';
 import { api } from '../api/client';
@@ -10,7 +10,9 @@ import { appVersionName } from '../config/runtime';
 import { stampClock } from '../device/clockStamp';
 import { localStore } from '../db/localStore';
 import { syncEngine } from '../sync/syncEngine';
-import { cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, type CartState } from './cart';
+import { cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, type CartState } from './cart';
+import { useDoctors } from './doctors';
+import { cartNeedsRx, localRxIssues, prescriptionCheckRequest, prescriptionPayload, rxPatientOf, rxSaleDay } from './prescription';
 import { promoPayloadFields, promosCurrentAt } from './promos';
 import { amountDueOf, billingPayload, billingProblem, buyerTinOf, withholdingFigures } from './billing';
 import { discountInput, totalsPayload } from './totals';
@@ -36,7 +38,7 @@ function percentText(n: number): string {
 // the server writes the card onto the client it finds/registers by phone. (A NEW client without a phone — only from
 // an older cart — goes as a named contactless one.) WALK_IN ("No client details") → contactless, carrying the
 // optional names; with no name at all, no client (an anonymous sale).
-function clientPayload(state: CartState): SaleClientPayload | null {
+export function clientPayload(state: Pick<CartState, 'client'>): SaleClientPayload | null {
   const c = state.client;
   if (c.kind === 'EXISTING') return { client_id: c.client.id };
   if (c.kind === 'NEW') {
@@ -121,6 +123,9 @@ export async function completeSale(input: {
   const billProblem = billingProblem(state.billTo, totals);
   if (billProblem) throw new Error(billProblem);
   const billing = withholdingFigures(totals, state.billTo, state.pricesIncludeVat);
+  // Prescription (Rx step): the local checks on the sale day (the online check ran on the screen before this).
+  const rxIssue = localPrescriptionIssues(state, soldAt)[0];
+  if (rxIssue) throw new Error(rxIssue.message);
 
   const lines: SaleLinePayload[] = state.lines.map((l) => {
     const statutoryLine = isStatutoryLine(state, l);
@@ -164,6 +169,7 @@ export async function completeSale(input: {
     transaction_discount_reason: txHas ? state.txDiscountReason.trim() || null : null,
     discount_approval: needsApproval && approval ? { approved_by_user_id: approval.approvedByUserId, approval_code: approval.approvalCode } : null,
     statutory_discount: state.statutory ? statutoryPayload(state.statutory) : null,
+    prescription: prescriptionPayload(state.rx, rxLinesOf(state), useDoctors.getState().items),
     ...billingPayload(state.billTo, billing),
     payments: paymentsPayload(payments, methods),
     note: state.note.trim() || null,
@@ -182,6 +188,48 @@ export async function completeSale(input: {
   });
   syncEngine.syncNow().catch(() => undefined);
   return sale;
+}
+
+/** The Rx step's local checks for the cart as it stands, on the Manila day of `at` ([] = fine or no Rx line). */
+export function localPrescriptionIssues(state: CartState, at: Date = new Date()): PosRxIssue[] {
+  return localRxIssues({
+    lines: rxLinesOf(state),
+    patient: rxPatientOf(state.client, state.statutory),
+    draft: state.rx,
+    doctors: useDoctors.getState().items,
+    today: rxSaleDay(at),
+  });
+}
+
+export type PrescriptionCheckOutcome =
+  | { kind: 'ok' } // no Rx line, or the server found nothing
+  | { kind: 'issues'; issues: PosRxIssue[]; local: boolean } // stay on the Rx step
+  | { kind: 'unchecked' } // offline / server unreachable: the local checks passed — the server re-checks at sync
+  | { kind: 'error'; message: string }; // the server refused the request itself (400 — e.g. refresh the price list)
+
+/** Before charging: the local checks, then — online with an online cashier — POST /pos/prescriptions/check (the web's
+ * rules, last word). Never throws. */
+export async function checkCartPrescription(state: CartState, online: boolean): Promise<PrescriptionCheckOutcome> {
+  const lines = rxLinesOf(state);
+  if (!cartNeedsRx(lines)) return { kind: 'ok' };
+  const local = localPrescriptionIssues(state);
+  if (local.length > 0) return { kind: 'issues', issues: local, local: true };
+  if (!online || !cashierSession.isOnlineSession()) return { kind: 'unchecked' };
+  try {
+    const res = await api.checkPrescription(
+      prescriptionCheckRequest({
+        client: clientPayload(state),
+        statutory: state.statutory ? statutoryPayload(state.statutory) : null,
+        lines,
+        prescription: prescriptionPayload(state.rx, lines, useDoctors.getState().items),
+      }),
+    );
+    return res.ok || res.issues.length === 0 ? { kind: 'ok' } : { kind: 'issues', issues: res.issues, local: false };
+  } catch (e) {
+    const status = (e as { status?: number }).status ?? 0;
+    if (status === 0 || status >= 500) return { kind: 'unchecked' };
+    return { kind: 'error', message: e instanceof Error ? e.message : 'The prescription couldn’t be checked.' };
+  }
 }
 
 /** Eligible co-signers: the cached list, refreshed (and re-cached) from the server when an online session exists. */

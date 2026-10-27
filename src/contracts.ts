@@ -14,6 +14,13 @@ import type {
   PosClient,
   PosClientCompany,
   PosCounters,
+  PosCreatePrescriptionDoctorRequest,
+  PosFillPrescriptionDoctorResponse,
+  PosOpenPrescription,
+  PosPrescriptionCheckRequest,
+  PosPrescriptionCheckResponse,
+  PosPrescriptionDoctor,
+  PosPrescriptionDoctorList,
   PosDisplayConfig,
   PosDisplayImage,
   PosBrand,
@@ -70,12 +77,20 @@ export interface Jose {
   signPunchPayload(payload: PosAttendancePunchPayload): Promise<string>;
 }
 
+/** PATCH /pos/prescription-doctors/:id/fill-missing body (contract: any of these, ≥ 1 non-blank; the contract names the
+ * fields but declares no type for the body). */
+export type PosFillPrescriptionDoctorRequest = Partial<
+  Pick<PosCreatePrescriptionDoctorRequest, 'license_number' | 'clinic' | 'specialty' | 'ptr_number' | 's2_license_number'>
+>;
+
 export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
     public code: string | null = null,
     public fieldErrors: Record<string, string[]> | null = null,
+    /** The body's `details` object as sent (e.g. the 409 PRESCRIPTION_DOCTOR_LICENSE_TAKEN `doctor`); null = none. */
+    public details: Record<string, unknown> | null = null,
   ) {
     super(message);
   }
@@ -100,6 +115,14 @@ export interface PosApi {
   /** One client company by id, active or not (a reprint with no saved buyer). */
   clientCompany(id: number): Promise<PosClientCompany>;
   approvers(kind: PosApprovalKind): Promise<PosApprover[]>;
+  // The Rx step (contract "Prescriptions — the POS Rx step"; device + cashier auth). The list is cached for offline
+  // (src/sale/doctors.ts); add / fill-missing / open prescriptions / check are online only.
+  prescriptionDoctors(): Promise<PosPrescriptionDoctorList>;
+  /** 409 PRESCRIPTION_DOCTOR_LICENSE_TAKEN → ApiError with `details.doctor` ({ id, name, is_active }). */
+  createPrescriptionDoctor(body: PosCreatePrescriptionDoctorRequest): Promise<PosPrescriptionDoctor>;
+  fillPrescriptionDoctor(id: number, body: PosFillPrescriptionDoctorRequest): Promise<PosFillPrescriptionDoctorResponse>;
+  openPrescriptions(clientId: number): Promise<PosOpenPrescription[]>;
+  checkPrescription(body: PosPrescriptionCheckRequest): Promise<PosPrescriptionCheckResponse>;
   stock(skuIds: number[]): Promise<PosStockRow[]>;
   sales(date?: string): Promise<PosSaleRow[]>;
   sync(ops: SyncOp[]): Promise<SyncResponse>;
