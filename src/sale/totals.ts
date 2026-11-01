@@ -7,7 +7,8 @@ import {
   type MaterialIssuanceTotals,
 } from '@shared/material-issuance-pricing';
 import type { DiscountInput } from '@shared/discount';
-import type { SalePayload } from '@pos-api/contract';
+import { assignStatutoryLines, DEFAULT_STATUTORY_RULES, type StatutoryType } from '@shared/statutory-rules';
+import type { SalePayload, SaleStatutoryPayload } from '@pos-api/contract';
 import { money } from './money';
 
 export type DiscountMode = 'amount' | 'percent';
@@ -37,11 +38,14 @@ export interface TotalsLineInput {
   quantity: number;
   unitPrice: number;
   isVatable: boolean;
-  /** Senior/PWD applies to this line (the sale has a statutory discount and the SKU is sc_pwd_eligible). */
+  /** A statutory card applies to this line (cart.ts `lineStatutoryType` — the shared line → card rule). */
   isStatutory: boolean;
-  /** A statutory line's rate (shared pricing; default 20 %). 0 = a Senior/PWD line of a promo item charged the PROMO
-   * price (VAT-exempt, no 20 % — src/sale/promos.ts `chargedLine`). */
+  /** A statutory line's rate as a fraction (the card type's rule; shared pricing default 20 %). 0 = a statutory line of
+   * a promo item charged the PROMO price (no rate off, the type's VAT treatment — src/sale/promos.ts `chargedLine`). */
   statutoryDiscountRate?: number;
+  /** A statutory line's VAT treatment (the card type's rule; default true = VAT-exempt like Senior/PWD). false = NAAC /
+   * Medal of Valor by default: the rate off the amount as shown, VAT on the rest. */
+  statutoryVatExempt?: boolean;
   itemDiscount: DiscountDraft;
 }
 
@@ -82,6 +86,7 @@ export function computeCartTotals(
       isVatable: l.isVatable,
       isStatutory: l.isStatutory,
       ...(l.statutoryDiscountRate !== undefined ? { statutoryDiscountRate: l.statutoryDiscountRate } : {}),
+      ...(l.statutoryVatExempt !== undefined ? { statutoryVatExempt: l.statutoryVatExempt } : {}),
     })),
     transactionDiscountAmount,
     mode,
@@ -109,24 +114,73 @@ export function totalsPayload(t: MaterialIssuanceTotals): SalePayload['totals'] 
   };
 }
 
+/** A recorded line's statutory card (null = an ordinary line): its type and what the device charged for that type. */
+export interface PayloadStatutoryLine {
+  type: StatutoryType;
+  ratePercent: number;
+  vatExempt: boolean;
+}
+
+/** The payload's cards in order: `statutory_cards` when sent (several cards), else the single `statutory_discount`. */
+export function payloadStatutoryCards(payload: Pick<SalePayload, 'statutory_cards' | 'statutory_discount'>): { cards: SaleStatutoryPayload[]; explicit: boolean } {
+  if (payload.statutory_cards && payload.statutory_cards.length > 0) return { cards: payload.statutory_cards, explicit: true };
+  return { cards: payload.statutory_discount ? [payload.statutory_discount] : [], explicit: false };
+}
+
+/** A recorded card's rule: the rate / VAT it carries (what the device charged); absent (an older app) = the law's
+ * defaults (Senior / PWD 20 %, VAT-exempt — the only types an older app could send). */
+export function payloadCardRule(card: SaleStatutoryPayload): { ratePercent: number; vatExempt: boolean } {
+  const rate = card.rate == null || card.rate === '' ? NaN : Number(card.rate);
+  const fallback = DEFAULT_STATUTORY_RULES[card.type] ?? DEFAULT_STATUTORY_RULES.SENIOR;
+  return {
+    ratePercent: Number.isFinite(rate) ? rate : fallback.ratePercent,
+    vatExempt: typeof card.vat_exempt === 'boolean' ? card.vat_exempt : fallback.vatExempt,
+  };
+}
+
+/** Each recorded line's card — the shared line → card rule (`assignStatutoryLines`), as the server applies it at sync. */
+export function payloadStatutoryLines(
+  payload: Pick<SalePayload, 'statutory_cards' | 'statutory_discount' | 'lines'>,
+  flags: (skuId: number) => { scPwdEligible: boolean; soloParentEligible?: boolean },
+): (PayloadStatutoryLine | null)[] {
+  const { cards, explicit } = payloadStatutoryCards(payload);
+  if (cards.length === 0) return payload.lines.map(() => null);
+  const { types } = assignStatutoryLines(
+    cards.map((c) => c.type),
+    explicit,
+    payload.lines.map((l) => {
+      const f = flags(l.sku_id);
+      return { statutoryType: l.statutory_type ?? null, model: { sc_pwd_eligible: f.scPwdEligible, solo_parent_eligible: f.soloParentEligible === true } };
+    }),
+  );
+  return types.map((type) => {
+    if (type === null) return null;
+    const card = cards.find((c) => c.type === type)!;
+    return { type, ...payloadCardRule(card) };
+  });
+}
+
 /** Re-prices a recorded payload (receipt / reprint) with the same shared code. `flags` per sku_id from the catalog. */
 export function computePayloadTotals(
   payload: SalePayload,
-  flags: (skuId: number) => { isVatable: boolean; scPwdEligible: boolean },
+  flags: (skuId: number) => { isVatable: boolean; scPwdEligible: boolean; soloParentEligible?: boolean },
 ): SaleTotals {
-  const statutoryOn = payload.statutory_discount != null;
+  const statutoryLines = payloadStatutoryLines(payload, flags);
+  const statutoryOn = payloadStatutoryCards(payload).cards.length > 0;
   const pct = (s: string | null | undefined) => (s == null || s === '' ? '' : s);
   return computeCartTotals(
-    payload.lines.map((l) => {
+    payload.lines.map((l, idx) => {
       const f = flags(l.sku_id);
       const percent = pct(l.item_discount_percent);
+      const st = statutoryLines[idx] ?? null;
       return {
         quantity: l.quantity,
         unitPrice: Number(l.unit_price),
         isVatable: f.isVatable,
-        isStatutory: statutoryOn && f.scPwdEligible,
-        // A Senior/PWD line of a promo item where the cashier chose the promo: VAT-exempt, no 20 % (as the server prices it).
-        ...(statutoryOn && f.scPwdEligible && l.promo_vs_scpwd === 'PROMO' ? { statutoryDiscountRate: 0 } : {}),
+        isStatutory: st !== null,
+        // A statutory line of a promo item where the cashier chose the promo: no rate off, the type's VAT treatment (as
+        // the server prices it).
+        ...(st !== null ? { statutoryDiscountRate: l.promo_vs_scpwd === 'PROMO' ? 0 : st.ratePercent / 100, statutoryVatExempt: st.vatExempt } : {}),
         itemDiscount: percent !== '' ? { value: percent, mode: 'percent' } : { value: l.item_discount_amount ?? '', mode: 'amount' },
       };
     }),

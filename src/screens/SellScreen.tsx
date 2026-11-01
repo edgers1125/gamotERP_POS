@@ -18,13 +18,13 @@ import { AUTO_TIME_OFF_MESSAGE } from '../db/policy';
 import { autoTime } from '../device/autoTime';
 import { useSyncStatus } from '../sync/syncEngine';
 import { cartNeedsRx, RX_WALK_IN_REASON } from '../sale/prescription';
-import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, rxLinesOf, shownPrice, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, rxLinesOf, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
 import { promosOf } from '../sale/promos';
 import { pricesIncludeVatOf } from '../sale/totals';
 import { saleClientName } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
 import type { SaleStackParamList } from '../sale/navigation';
-import { clientHasStatutory, clientStatutoryBlock, draftFromClient, statutoryTypeLabel } from '../sale/statutory';
+import { clientHasStatutory, clientStatutoryBlock, draftFromClient, statutoryConfigOf, statutoryTypeLabel } from '../sale/statutory';
 import { usePosData, useStockHint } from '../sale/usePosData';
 import { CartLineRow } from '../components/sale/CartLineRow';
 import { ClientDialog } from '../components/sale/ClientDialog';
@@ -116,7 +116,10 @@ export function SellScreen({ navigation }: SellScreenProps) {
   // Frozen for the sale in progress: a setting change re-read mid-sale applies from the next sale (cart empty again),
   // so the amount due never moves under the cashier (the server accepts the device's mode and flags a mismatch).
   useEffect(() => {
-    if (data.bootstrap && !hasLines) useCart.getState().setPricesIncludeVat(pricesIncludeVatOf(data.bootstrap));
+    if (!data.bootstrap || hasLines) return;
+    // The statutory discount rules (rates / VAT / which types, one card per sale) are frozen the same way.
+    useCart.getState().setPricesIncludeVat(pricesIncludeVatOf(data.bootstrap));
+    useCart.getState().setStatutoryConfig(statutoryConfigOf(data.bootstrap));
   }, [data.bootstrap, hasLines]);
   useEffect(() => {
     if (!hasLines || promos.length === 0) return;
@@ -126,7 +129,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
 
   useStockHint(cart.lines, sync.online, cart.setStock);
 
-  const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory]); // eslint-disable-line react-hooks/exhaustive-deps
+  const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory, cart.extraCards, cart.statutoryConfig, cart.pricesIncludeVat]); // eslint-disable-line react-hooks/exhaustive-deps
   // No open cash drawer on this terminal → Charge stays off (localStore.recordSale refuses too).
   const drawer = useDrawerGate();
   const needsRx = cartNeedsRx(rxLinesOf(cart));
@@ -237,7 +240,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
       <View style={styles.totals}>
         <TotalsSummary
           totals={totals}
-          statutoryLabel={cart.statutory ? statutoryTypeLabel(cart.statutory.type) : undefined}
+          statutoryRows={statutoryDiscountRows(cart, totals)}
           saleDiscount={{
             value: cart.txDiscount,
             reason: cart.txDiscountReason,

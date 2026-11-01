@@ -13,7 +13,7 @@ import vectors from '@shared/vat-inclusive.vectors.json';
 type Sale = {
   name: string;
   pricesIncludeVat: boolean;
-  lines: { quantity: number; unitPrice: number; isVatable: boolean; itemDiscountAmount?: number; isStatutory?: boolean }[];
+  lines: { quantity: number; unitPrice: number; isVatable: boolean; itemDiscountAmount?: number; isStatutory?: boolean; statutoryRate?: number; statutoryVatExempt?: boolean }[];
   transactionDiscount: number;
   subtotal: number;
   totalVat: number;
@@ -50,6 +50,9 @@ for (const s of v.sales) {
       unitPrice: l.unitPrice,
       isVatable: l.isVatable,
       isStatutory: l.isStatutory ?? false,
+      // BIR Phase 2: the card type's rate (fraction) and VAT treatment (NAAC / Solo Parent / Medal of Valor vectors).
+      ...(l.statutoryRate !== undefined ? { statutoryDiscountRate: l.statutoryRate } : {}),
+      ...(l.statutoryVatExempt !== undefined ? { statutoryVatExempt: l.statutoryVatExempt } : {}),
       itemDiscount: l.itemDiscountAmount ? { value: String(l.itemDiscountAmount), mode: 'amount' } : NO_DISCOUNT,
     })),
     s.transactionDiscount > 0 ? { value: String(s.transactionDiscount), mode: 'amount' } : NO_DISCOUNT,

@@ -182,21 +182,29 @@ export function chargedLine(line: PromoLine, statutoryLine: boolean): ChargedLin
   return regular;
 }
 
-/** Both amounts for the cashier's choice (shared compareScPwd — highlight `better`). */
-export function scPwdComparison(line: PromoLine): PromoScPwdComparison | null {
+/**
+ * Both amounts for the cashier's choice (highlight `better`). `ratePercent` = the line's card rate (Solo Parent 10 % …):
+ * 20 % is the shared compareScPwd; another rate the same integer-centavo maths with that rate (a hint for the choice —
+ * the charged amounts are the shared pricing code's).
+ */
+export function scPwdComparison(line: PromoLine, ratePercent = 20): PromoScPwdComparison | null {
   if (!line.promo) return null;
-  return compareScPwd(line.quantity, line.unitPriceText, line.promo.priceText);
+  if (ratePercent === 20) return compareScPwd(line.quantity, line.unitPriceText, line.promo.priceText);
+  const regular = line.quantity * promoCents(line.unitPriceText);
+  const card = regular - Math.round((regular * ratePercent) / 100);
+  const promo = line.quantity * promoCents(line.promo.priceText);
+  return { promo_total: promo / 100, scpwd_total: card / 100, better: promo < card ? 'PROMO' : card < promo ? 'SCPWD' : 'EQUAL' };
 }
 
-export const PROMO_LAW_NOTE = 'By law the customer gets the better of the two — the promo or the Senior/PWD 20% — never both.';
+export const PROMO_LAW_NOTE = 'By law the customer gets the better of the two — the promo or the statutory discount — never both.';
 
-/** The first line still waiting for the cashier's Promo-vs-SC/PWD choice (null = none). */
-export function promoChoiceProblem(lines: readonly PromoLine[], isStatutory: (l: PromoLine) => boolean): string | null {
+/** The first line still waiting for the cashier's Promo-vs-card choice (null = none). `discountName(l)` = "Senior 20%"… */
+export function promoChoiceProblem(lines: readonly PromoLine[], isStatutory: (l: PromoLine) => boolean, discountName: (l: PromoLine) => string = () => 'Senior/PWD 20%'): string | null {
   const open = lines.filter((l) => needsPromoChoice(l, isStatutory(l)) && l.promoChoice === null);
   if (open.length === 0) return null;
   return open.length === 1
-    ? `Choose Promo or Senior/PWD 20% for ${open[0]!.name}.`
-    : `Choose Promo or Senior/PWD 20% for ${open.length} items (${open.map((l) => l.name).join(', ')}).`;
+    ? `Choose Promo or ${discountName(open[0]!)} for ${open[0]!.name}.`
+    : `Choose Promo or the statutory discount for ${open.length} items (${open.map((l) => l.name).join(', ')}).`;
 }
 
 /** The promo fields of the sale line (contract SaleLinePayload) — none for a line without a promo (older servers too). */

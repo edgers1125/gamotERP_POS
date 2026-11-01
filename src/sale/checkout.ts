@@ -10,7 +10,7 @@ import { appVersionName } from '../config/runtime';
 import { stampClock } from '../device/clockStamp';
 import { localStore } from '../db/localStore';
 import { syncEngine } from '../sync/syncEngine';
-import { cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, type CartState } from './cart';
+import { cardPayload, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, lineStatutoryType, multiCard, rxLinesOf, statutoryCardsProblem, statutoryPayloadFields, type CartState } from './cart';
 import { useDoctors } from './doctors';
 import { cartNeedsRx, localRxIssues, prescriptionCheckRequest, prescriptionPayload, rxPatientOf, rxSaleDay } from './prescription';
 import { promoPayloadFields, promosCurrentAt } from './promos';
@@ -18,7 +18,7 @@ import { amountDueOf, billingPayload, billingProblem, buyerTinOf, withholdingFig
 import { discountInput, totalsPayload } from './totals';
 import { money } from './money';
 import { paymentsPayload, type PaymentDraft } from './payments';
-import { clientName, statutoryPayload } from './statutory';
+import { clientName } from './statutory';
 import { rememberReceiptSnapshot } from './receipt';
 
 export function appVersion(): string {
@@ -127,15 +127,20 @@ export async function completeSale(input: {
   const rxIssue = localPrescriptionIssues(state, soldAt)[0];
   if (rxIssue) throw new Error(rxIssue.message);
 
+  const statutoryProblemNow = statutoryCardsProblem(state, rxSaleDay(soldAt));
+  if (statutoryProblemNow) throw new Error(statutoryProblemNow);
+  const several = multiCard(state);
   const lines: SaleLinePayload[] = state.lines.map((l) => {
     const statutoryLine = isStatutoryLine(state, l);
     // unit_price = as charged (the promo price when the promo prices it); a promo line also carries promo_id, the regular
-    // price it was taken off and, on a Senior/PWD sale, the cashier's choice (contract SaleLinePayload).
+    // price it was taken off and, on a statutory line, the cashier's choice (contract SaleLinePayload). Several cards →
+    // each line names its card (null = an ordinary line).
     const line: SaleLinePayload = {
       sku_id: l.skuId,
       quantity: l.quantity,
       unit_price: chargedLineOf(state, l).unitPriceText,
       ...promoPayloadFields(l, statutoryLine),
+      ...(several ? { statutory_type: lineStatutoryType(state, l) } : {}),
     };
     if (!statutoryLine) {
       const d = discountInput(l.discount);
@@ -168,7 +173,7 @@ export async function completeSale(input: {
     prices_include_vat: state.pricesIncludeVat,
     transaction_discount_reason: txHas ? state.txDiscountReason.trim() || null : null,
     discount_approval: needsApproval && approval ? { approved_by_user_id: approval.approvedByUserId, approval_code: approval.approvalCode } : null,
-    statutory_discount: state.statutory ? statutoryPayload(state.statutory) : null,
+    ...statutoryPayloadFields(state),
     prescription: prescriptionPayload(state.rx, rxLinesOf(state), useDoctors.getState().items),
     ...billingPayload(state.billTo, billing),
     payments: paymentsPayload(payments, methods),
@@ -179,7 +184,14 @@ export async function completeSale(input: {
   const sale = await localStore.recordSale((invoiceSeq) => ({ ...base, invoice_seq: invoiceSeq, sold_at: soldAt.toISOString() }));
 
   rememberReceiptSnapshot(sale.client_uuid, {
-    lines: state.lines.map((l) => ({ skuId: l.skuId, name: l.name, isVatable: l.isVatable, scPwdEligible: l.scPwdEligible, promoName: l.promo?.name ?? null })),
+    lines: state.lines.map((l) => ({
+      skuId: l.skuId,
+      name: l.name,
+      isVatable: l.isVatable,
+      scPwdEligible: l.scPwdEligible,
+      soloParentEligible: l.soloParentEligible,
+      promoName: l.promo?.name ?? null,
+    })),
     customerName: saleClientName(state),
     buyer: state.billTo ? { name: state.billTo.company.name, address: state.billTo.company.address.trim() || null, tin: buyerTinOf(state.billTo) } : null,
     paymentMethods: methods,
@@ -219,7 +231,7 @@ export async function checkCartPrescription(state: CartState, online: boolean): 
     const res = await api.checkPrescription(
       prescriptionCheckRequest({
         client: clientPayload(state),
-        statutory: state.statutory ? statutoryPayload(state.statutory) : null,
+        statutory: state.statutory ? cardPayload(state, state.statutory) : null,
         lines,
         prescription: prescriptionPayload(state.rx, lines, useDoctors.getState().items),
       }),

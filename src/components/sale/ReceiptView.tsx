@@ -220,8 +220,26 @@ export function ReceiptView({ data }: { data: ReceiptData }) {
       <WriteOnLine label="Customer" value={data.customer_block.name} />
       <WriteOnLine label="Address" value={data.customer_block.address} />
       <WriteOnLine label="TIN" value={data.customer_block.tin} />
-      <WriteOnLine label={data.customer_block.id_label} value={data.customer_block.id_number} />
-      <WriteOnLine label="Signature" value={null} />
+      {(data.statutory_cards?.length ?? 0) >= 2 ? (
+        // Several statutory cards: one block per card, each with its own signature line (as the web receipt).
+        data.statutory_cards!.map((card, i) => (
+          <View key={`${card.type}-${i}`} style={{ marginTop: 2 * MM }}>
+            <T style={bold}>{card.customer_type_label}</T>
+            <WriteOnLine label={card.id_label} value={card.id_number} />
+            <WriteOnLine label="Name" value={card.holder_name} />
+            {card.solo_parent ? <WriteOnLine label="SP Booklet No" value={card.solo_parent.booklet_number} /> : null}
+            {card.solo_parent?.children.map((child, ci) => <WriteOnLine key={ci} label="Child" value={child} />)}
+            <WriteOnLine label="Signature" value={null} />
+          </View>
+        ))
+      ) : (
+        <>
+          <WriteOnLine label={data.customer_block.id_label} value={data.customer_block.id_number} />
+          {data.solo_parent ? <WriteOnLine label="SP Booklet No" value={data.solo_parent.booklet_number} /> : null}
+          {data.solo_parent?.children.map((child, ci) => <WriteOnLine key={ci} label="Child" value={child} />)}
+          <WriteOnLine label="Signature" value={null} />
+        </>
+      )}
 
       <Divider />
 

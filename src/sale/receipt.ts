@@ -25,10 +25,10 @@ import {
   type ReceiptSource,
 } from '@shared/receipt-layout';
 import { shownUnitPrice } from '@shared/vat-inclusive';
-import type { PosBootstrap, PosCatalog, PosPaymentMethod } from '@pos-api/contract';
+import type { PosBootstrap, PosCatalog, PosPaymentMethod, SaleStatutoryPayload } from '@pos-api/contract';
 import type { LocalSale } from '../contracts';
 import { localStore } from '../db/localStore';
-import { computePayloadTotals } from './totals';
+import { computePayloadTotals, payloadStatutoryCards, payloadStatutoryLines } from './totals';
 import { promosOf } from './promos';
 import { toCents } from './money';
 
@@ -39,6 +39,8 @@ export interface ReceiptLineSnapshot {
   name: string;
   isVatable: boolean;
   scPwdEligible: boolean;
+  // Solo Parent eligible at the sale. Absent before app 1.6.0 (= false — no Solo Parent card existed then).
+  soloParentEligible?: boolean;
   // The store promo's name as it was at the sale ("Promo: <name>" on the receipt). Absent before 2026-10-08.
   promoName?: string | null;
 }
@@ -160,13 +162,24 @@ export function buildReceipt(
   const snapById = new Map((snap?.lines ?? []).map((l) => [l.skuId, l]));
   const infoOf = (skuId: number) => {
     const s = snapById.get(skuId);
-    if (s) return { name: s.name, isVatable: s.isVatable, scPwdEligible: s.scPwdEligible };
+    if (s) return { name: s.name, isVatable: s.isVatable, scPwdEligible: s.scPwdEligible, soloParentEligible: s.soloParentEligible === true };
     const c = catalogById.get(skuId);
-    return c ? { name: c.final_name, isVatable: c.is_vatable, scPwdEligible: c.sc_pwd_eligible } : { name: `SKU #${skuId}`, isVatable: true, scPwdEligible: false };
+    return c
+      ? { name: c.final_name, isVatable: c.is_vatable, scPwdEligible: c.sc_pwd_eligible, soloParentEligible: c.solo_parent_eligible === true }
+      : { name: `SKU #${skuId}`, isVatable: true, scPwdEligible: false, soloParentEligible: false };
   };
   const totals = computePayloadTotals(p, (id) => infoOf(id));
+  const statutoryLines = payloadStatutoryLines(p, (id) => infoOf(id));
   const mode = { pricesIncludeVat: p.prices_include_vat ?? false };
-  const statutory = p.statutory_discount ?? null;
+  // Card 0 = the sale client's card (the single statutory_discount, or the first of statutory_cards).
+  const { cards } = payloadStatutoryCards(p);
+  const statutory = cards[0] ?? null;
+  const receiptCard = (c: SaleStatutoryPayload) => ({
+    type: c.type,
+    idNumber: c.id_number,
+    holderName: [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' '),
+    ...(c.type === 'SOLO_PARENT' ? { bookletNumber: c.booklet_number ?? null, children: (c.children ?? []).map((ch) => ({ name: ch.name })) } : {}),
+  });
   const methods = new Map([...(bootstrap?.payment_methods ?? []), ...(catalog?.payment_methods ?? []), ...(snap?.paymentMethods ?? [])].map((m) => [m.id, m]));
   const terminal = bootstrap?.terminal ?? null;
 
@@ -200,7 +213,8 @@ export function buildReceipt(
         }
       : null,
     reprintedAt: opts.reprint ? new Date() : null,
-    statutory: statutory ? { type: statutory.type, idNumber: statutory.id_number, holderName } : null,
+    statutory: statutory ? receiptCard(statutory) : null,
+    statutoryCards: cards.map(receiptCard),
     // An existing client's address isn't on the device; a Senior/PWD card's address typed at the sale is.
     client: clientName ? { name: clientName, address: statutory?.address ? formatAddress(statutory.address) : null } : null,
     // "Cashier: X · Sold by: Y" — from the snapshot taken at the sale, else today's Sales Staff list.
@@ -227,6 +241,10 @@ export function buildReceipt(
         lineTotal: toCents(c.lineTotal),
         isVatable: c.isVatable,
         isStatutory: c.isStatutory,
+        // The line's card type, rate and VAT treatment ("Less 10% Solo Parent Discount"; a VAT-charged NAAC line is VATable).
+        ...(statutoryLines[idx]
+          ? { statutoryType: statutoryLines[idx]!.type, statutoryRatePercent: statutoryLines[idx]!.ratePercent, statutoryVatExempt: statutoryLines[idx]!.vatExempt }
+          : {}),
       };
     }),
     pricesIncludeVat: mode.pricesIncludeVat,
@@ -373,8 +391,27 @@ export function receiptTextLines(r: ReceiptData): string[] {
   writeOn('Customer', r.customer_block.name);
   writeOn('Address', r.customer_block.address);
   writeOn('TIN', r.customer_block.tin);
-  writeOn(r.customer_block.id_label, r.customer_block.id_number);
-  writeOn('Signature', null);
+  const cards = r.statutory_cards ?? [];
+  if (cards.length >= 2) {
+    // Several statutory cards: one block per card, each with its own signature line (as the web receipt).
+    for (const card of cards) {
+      push('', card.customer_type_label);
+      writeOn(card.id_label, card.id_number);
+      writeOn('Name', card.holder_name);
+      if (card.solo_parent) {
+        writeOn('SP Booklet No', card.solo_parent.booklet_number);
+        card.solo_parent.children.forEach((child) => writeOn('Child', child));
+      }
+      writeOn('Signature', null);
+    }
+  } else {
+    writeOn(r.customer_block.id_label, r.customer_block.id_number);
+    if (r.solo_parent) {
+      writeOn('SP Booklet No', r.solo_parent.booklet_number);
+      r.solo_parent.children.forEach((child) => writeOn('Child', child));
+    }
+    writeOn('Signature', null);
+  }
   rule();
   // 9. Other information (BIR), centred
   const pv = r.provider;

@@ -1,5 +1,5 @@
 // The sale's figures, straight from the shared pricing code's result (src/sale/totals.ts). A VAT-registered company's
-// prices include VAT (VAT row = the VAT inside the total); otherwise VAT is added on top. Senior/PWD lines are VAT-exempt.
+// prices include VAT (VAT row = the VAT inside the total); otherwise VAT is added on top. VAT-exempt statutory lines (Senior/PWD/Solo Parent) carry no VAT.
 // With `saleDiscount` (the till), the sale-discount row is also where it's added/edited: an "+ Add sale discount" row
 // in its place in the totals when there's none, the applied row with "Edit" when there is one — so the entry point
 // sits exactly where the discount shows, never on a separate chip that can scroll or squeeze out of view.
@@ -20,13 +20,14 @@ export interface SaleDiscountControl {
 
 export function TotalsSummary({
   totals,
-  statutoryLabel,
+  statutoryRows,
   saleDiscount,
   saleDiscountValue,
   saleDiscountReason,
 }: {
   totals: SaleTotals;
-  statutoryLabel?: string;
+  /** One row per statutory card type ("Senior 20%", "Solo Parent 10%" — cart.ts `statutoryDiscountRows`). */
+  statutoryRows?: { label: string; amount: number }[];
   /** Makes the sale-discount row editable (Sell screen). */
   saleDiscount?: SaleDiscountControl;
   /** Read-only display of the typed discount (Payment screen) — shows "(10%)" and the reason. */
@@ -96,9 +97,11 @@ export function TotalsSummary({
         </>
       ) : null}
 
-      {totals.totalStatutoryDiscount > 0 ? (
-        <SummaryRow label={`${statutoryLabel ?? 'Senior/PWD'} 20%`} value={formatPeso(-totals.totalStatutoryDiscount)} tone="success" />
-      ) : null}
+      {totals.totalStatutoryDiscount > 0
+        ? (statutoryRows ?? [{ label: 'Statutory discount', amount: totals.totalStatutoryDiscount }]).map((r) => (
+            <SummaryRow key={r.label} label={r.label} value={formatPeso(-r.amount)} tone="success" />
+          ))
+        : null}
       {totals.vatExemptSales > 0 ? <SummaryRow label="VAT-exempt sales" value={formatPeso(totals.vatExemptSales)} tone="muted" /> : null}
       <SummaryRow label={totals.pricesIncludeVat ? 'VAT included (12%)' : 'VAT (12%)'} value={formatPeso(totals.totalVat)} tone="muted" />
       <SummaryRow label="Total" value={formatPeso(totals.grandTotal)} strong />

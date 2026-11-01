@@ -18,7 +18,7 @@ import { useCashier } from '../auth/cashierSession';
 import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, shownPrice, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
 import { amountDueOf, withholdingFigures } from '../sale/billing';
 import { checkCartPrescription, completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
@@ -53,7 +53,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
   const doctors = useDoctors((s) => s.items);
   const wide = useWindowDimensions().width >= 720;
 
-  const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory]); // eslint-disable-line react-hooks/exhaustive-deps
+  const totals = useMemo(() => cartTotals(cart), [cart.lines, cart.txDiscount, cart.statutory, cart.extraCards, cart.statutoryConfig, cart.pricesIncludeVat]); // eslint-disable-line react-hooks/exhaustive-deps
   // "Bill to company" (BIR Phase 1): the buyer withholds part of the total — the payments, tender and change are against
   // the AMOUNT DUE (grand total − withholding); with no company it IS the grand total.
   const billing = useMemo(() => withholdingFigures(totals, cart.billTo, cart.pricesIncludeVat), [totals, cart.billTo, cart.pricesIncludeVat]);
@@ -164,7 +164,7 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
       </View>
       <TotalsSummary
         totals={totals}
-        statutoryLabel={cart.statutory ? statutoryTypeLabel(cart.statutory.type) : undefined}
+        statutoryRows={statutoryDiscountRows(cart, totals)}
         saleDiscountValue={cart.txDiscount}
         saleDiscountReason={cart.txDiscountReason}
       />

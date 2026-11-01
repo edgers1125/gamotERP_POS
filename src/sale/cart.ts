@@ -9,20 +9,35 @@ import { create } from 'zustand';
 import * as Crypto from 'expo-crypto';
 import { isPhMobile, normalizePhone } from '@shared/phone';
 import type { PosCatalog, PosCatalogItem, PosClient, PosPromo } from '@pos-api/contract';
-import { computeCartTotals, discountInput, hasDiscount, NO_DISCOUNT, type DiscountDraft, type SaleTotals } from './totals';
+import { discountInput, hasDiscount, NO_DISCOUNT, type DiscountDraft, type SaleTotals } from './totals';
 import { shownUnitPrice } from '@shared/vat-inclusive';
+import {
+  cardDiscountName,
+  cartTotals,
+  chargedLineOf,
+  isStatutoryLine,
+  lineStatutoryType,
+  statutoryCardsProblem,
+} from './cartMath';
+export * from './cartMath';
 import { billingProblem, type BillToDraft } from './billing';
 import { isMoneyText, round2 } from './money';
-import { statutoryClientConflict, statutoryProblem, type StatutoryDraft } from './statutory';
+import {
+  LEGACY_STATUTORY_CONFIG,
+  sameStatutoryConfig,
+  statutoryClientConflict,
+  statutoryTypeLabel,
+  type StatutoryConfig,
+  type StatutoryDraft,
+  type StatutoryType,
+} from './statutory';
 import { cartNeedsRx, RX_WALK_IN_REASON, type RxDraft, type RxLineInput } from './prescription';
 import {
-  chargedLine,
   promoChoiceProblem,
   promoRefreshNotice,
   refreshLinePromos,
   samePromoList,
   withPromoAt,
-  type ChargedLine,
   type LinePromo,
   type PromoScPwdChoice,
 } from './promos';
@@ -38,6 +53,11 @@ export interface CartLine {
   unitPrice: number;
   isVatable: boolean;
   scPwdEligible: boolean;
+  /** Eligible for the Solo Parent discount (catalog `solo_parent_eligible`; absent on an older catalog = false). */
+  soloParentEligible: boolean;
+  /** Several cards on the sale (`multiCard`): the card the cashier picked for this line — null = the default (the first
+   * card the item is eligible for), 'NONE' = no card. Ignored with one card (every eligible line gets it). */
+  cardChoice: StatutoryType | 'NONE' | null;
   /** The SKU's product model (null = none) and its name — a prescription covers models, counted in pieces. */
   modelId: number | null;
   modelName: string;
@@ -87,7 +107,14 @@ export interface CartState {
   lines: CartLine[];
   txDiscount: DiscountDraft;
   txDiscountReason: string;
+  /** The sale's statutory card — card 0, the sale client's own (null = no statutory discount). */
   statutory: StatutoryDraft | null;
+  /** Further cards (Phase 2b, only while the company allows several — `statutoryConfig.oneTypePerSale` false): one per
+   * type, never card 0's type. Empty when `statutory` is null. */
+  extraCards: StatutoryDraft[];
+  /** The company's statutory rules (cached bootstrap `statutoryConfigOf`). Kept across sales; the Sell screen changes it
+   * only while the cart is empty (frozen for the sale in progress, like `pricesIncludeVat`). */
+  statutoryConfig: StatutoryConfig;
   client: SaleClient;
   /** "Bill to company" (BIR Phase 1): the buyer company + its withholding, picked on the Payment screen (online only). */
   billTo: BillToDraft | null;
@@ -112,7 +139,14 @@ export interface CartState {
   setLineDiscount(skuId: number, discount: DiscountDraft): void;
   removeLine(skuId: number): void;
   setTxDiscount(discount: DiscountDraft, reason: string): void;
+  /** Card 0 (the client's). null removes every card. */
   setStatutory(draft: StatutoryDraft | null): void;
+  /** The further cards (replaces the list; needs card 0). */
+  setExtraCards(cards: StatutoryDraft[]): void;
+  /** The card picked for a line (several cards). */
+  setLineCard(skuId: number, choice: StatutoryType | 'NONE' | null): void;
+  /** The statutory rules from the bootstrap (the Sell screen calls it only while the cart is empty). */
+  setStatutoryConfig(config: StatutoryConfig): void;
   setClient(client: SaleClient): void;
   setBillTo(billTo: BillToDraft | null): void;
   setRx(rx: RxDraft | null): void;
@@ -165,6 +199,7 @@ function repriced(lines: CartLine[], catalog: PosCatalog | null, channelId: numb
           unitPrice: Number(price),
           isVatable: item.is_vatable,
           scPwdEligible: item.sc_pwd_eligible,
+          soloParentEligible: item.solo_parent_eligible === true,
           ...rxFieldsOf(item),
         },
         promos,
@@ -181,6 +216,7 @@ const EMPTY = {
   txDiscount: NO_DISCOUNT,
   txDiscountReason: '',
   statutory: null,
+  extraCards: [] as StatutoryDraft[],
   client: { kind: 'UNSET' } as SaleClient,
   billTo: null as BillToDraft | null,
   rx: null as RxDraft | null,
@@ -205,11 +241,28 @@ export function isSystemCartUpdate(): boolean {
   return systemDepth > 0;
 }
 
-export const useCart = create<CartState>()((set, get) => ({
+export const useCart = create<CartState>()((set, get) => {
+  function applyCards(statutory: StatutoryDraft | null, extraCards: StatutoryDraft[]): void {
+    const s = get();
+    if (statutory === null) {
+      set({ statutory: null, extraCards: [], lines: s.lines.map((l) => (l.cardChoice === null ? l : { ...l, cardChoice: null })) });
+      return;
+    }
+    const next = { ...s, statutory, extraCards };
+    set({
+      statutory,
+      extraCards,
+      lines: s.lines.map((l) => (lineStatutoryType(next, l) !== null && hasDiscount(l.discount) ? { ...l, discount: NO_DISCOUNT } : l)),
+      txDiscount: NO_DISCOUNT,
+      txDiscountReason: '',
+    });
+  }
+  return {
   channelId: null,
   soldById: null,
   promos: [],
   pricesIncludeVat: false,
+  statutoryConfig: LEGACY_STATUTORY_CONFIG,
   ...EMPTY,
 
   setChannel(channelId, catalog, channelName) {
@@ -246,6 +299,8 @@ export const useCart = create<CartState>()((set, get) => ({
       unitPrice: Number(price),
       isVatable: item.is_vatable,
       scPwdEligible: item.sc_pwd_eligible,
+      soloParentEligible: item.solo_parent_eligible === true,
+      cardChoice: null,
       ...rxFieldsOf(item),
       quantity: 1,
       discount: NO_DISCOUNT,
@@ -274,20 +329,24 @@ export const useCart = create<CartState>()((set, get) => ({
     set({ txDiscount: discount, txDiscountReason: reason });
   },
 
-  // Turning Senior/PWD on clears what it can't be combined with (no double discount), rather than leaving values that
-  // would be refused.
+  // A card clears what it can't be combined with (no double discount): the item discount of every line it now applies
+  // to and the transaction discount — rather than leaving values that would be refused.
   setStatutory(draft) {
+    applyCards(draft, draft ? get().extraCards : []);
+  },
+  setExtraCards(cards) {
     const s = get();
-    if (draft && !s.statutory) {
-      set({
-        statutory: draft,
-        lines: s.lines.map((l) => (l.scPwdEligible ? { ...l, discount: NO_DISCOUNT } : l)),
-        txDiscount: NO_DISCOUNT,
-        txDiscountReason: '',
-      });
-      return;
-    }
-    set({ statutory: draft });
+    if (!s.statutory) return;
+    applyCards(s.statutory, cards);
+  },
+  setLineCard(skuId, choice) {
+    const s = get();
+    const lines = s.lines.map((l) => (l.skuId === skuId ? { ...l, cardChoice: choice } : l));
+    const next = { ...s, lines };
+    set({ lines: lines.map((l) => (l.skuId === skuId && lineStatutoryType(next, l) !== null ? { ...l, discount: NO_DISCOUNT } : l)) });
+  },
+  setStatutoryConfig(config) {
+    if (!sameStatutoryConfig(get().statutoryConfig, config)) systemUpdate(() => set({ statutoryConfig: config }));
   },
 
   // An open prescription being filled belongs to its client: another client drops it (a new one is kept — it names no client).
@@ -361,38 +420,13 @@ export const useCart = create<CartState>()((set, get) => ({
   reset() {
     set({ ...EMPTY });
   },
-}));
+  };
+});
 
 // ---------------------------------------------------------------------------------------------------------------
-// Derived values (pure — call from components with useMemo).
+// Derived values (pure — call from components with useMemo). The money ones live in cartMath.ts (testable without the
+// app runtime) and are re-exported here.
 
-export function isStatutoryLine(state: Pick<CartState, 'statutory'>, line: CartLine): boolean {
-  return state.statutory !== null && line.scPwdEligible;
-}
-
-/** What the line is charged (promo price, or the regular price; a Senior/PWD promo line by the cashier's choice). */
-export function chargedLineOf(state: Pick<CartState, 'statutory'>, line: CartLine): ChargedLine {
-  return chargedLine(line, isStatutoryLine(state, line));
-}
-
-export function cartTotals(state: Pick<CartState, 'lines' | 'txDiscount' | 'statutory' | 'pricesIncludeVat'>): SaleTotals {
-  return computeCartTotals(
-    state.lines.map((l) => {
-      const charged = chargedLineOf(state, l);
-      return {
-        quantity: l.quantity,
-        unitPrice: charged.unitPrice,
-        isVatable: l.isVatable,
-        isStatutory: isStatutoryLine(state, l),
-        ...(charged.statutoryDiscountRate !== undefined ? { statutoryDiscountRate: charged.statutoryDiscountRate } : {}),
-        itemDiscount: l.discount,
-      };
-    }),
-    state.txDiscount,
-    state.statutory !== null,
-    state.pricesIncludeVat,
-  );
-}
 
 /** A before-VAT price as the cashier and customer see it: with VAT included on a vatable line in VAT-inclusive mode. */
 export function shownPrice(state: Pick<CartState, 'pricesIncludeVat'>, line: Pick<CartLine, 'isVatable'>, price: number): number {
@@ -412,18 +446,19 @@ function discountTextProblem(d: DiscountDraft): string | null {
 }
 
 /** The first discount problem the server would refuse (null = fine). */
-export function discountProblem(state: Pick<CartState, 'lines' | 'txDiscount' | 'txDiscountReason' | 'statutory'>, totals: SaleTotals): string | null {
+export function discountProblem(state: Pick<CartState, 'lines' | 'txDiscount' | 'txDiscountReason' | 'statutory' | 'extraCards'>, totals: SaleTotals): string | null {
   for (let i = 0; i < state.lines.length; i++) {
     const l = state.lines[i]!;
-    if (isStatutoryLine(state, l)) {
-      if (hasDiscount(l.discount)) return `${l.name} already gets the Senior/PWD discount — remove the item discount.`;
+    const type = lineStatutoryType(state, l);
+    if (type !== null) {
+      if (hasDiscount(l.discount)) return `${l.name} already gets the ${statutoryTypeLabel(type)} discount — remove the item discount.`;
       continue;
     }
     const p = discountTextProblem(l.discount);
     if (p) return `${l.name}: ${p}`;
     if ((totals.itemDiscountAmounts[i] ?? 0) > round2(l.quantity * (totals.lines[i]?.shownUnitPrice ?? chargedLineOf(state, l).unitPrice))) return `${l.name}: the discount can’t exceed the line subtotal.`;
   }
-  if (state.statutory !== null && hasDiscount(state.txDiscount)) return 'A transaction discount can’t be combined with the Senior/PWD discount.';
+  if (state.statutory !== null && hasDiscount(state.txDiscount)) return `A transaction discount can’t be combined with the ${statutoryTypeLabel(state.statutory.type)} discount.`;
   const tp = discountTextProblem(state.txDiscount);
   if (tp) return `Transaction discount: ${tp}`;
   if (hasDiscount(state.txDiscount)) {
@@ -433,6 +468,7 @@ export function discountProblem(state: Pick<CartState, 'lines' | 'txDiscount' | 
   }
   return null;
 }
+
 
 /** Why the cart can't go to payment yet (null = ready). */
 export function cartProblem(state: CartState, totals: SaleTotals): string | null {
@@ -445,13 +481,19 @@ export function cartProblem(state: CartState, totals: SaleTotals): string | null
   const d = discountProblem(state, totals);
   if (d) return d;
   if (state.statutory) {
-    if (!state.lines.some((l) => l.scPwdEligible)) return 'No item in the cart is eligible for the Senior/PWD discount.';
-    const p = statutoryProblem(state.statutory);
-    if (p) return p;
-    // A promo item on a Senior/PWD sale: the cashier picks the promo OR the 20 % per line (decision 6) — no default.
-    const choice = promoChoiceProblem(state.lines, (l) => isStatutoryLine(state, l as CartLine));
+    const s = statutoryCardsProblem(state);
+    if (s) return s;
+    // A promo item on a statutory line: the cashier picks the promo OR the card's discount per line (decision 6) — no default.
+    const choice = promoChoiceProblem(
+      state.lines,
+      (l) => isStatutoryLine(state, l as CartLine),
+      (l) => {
+        const type = lineStatutoryType(state, l as CartLine);
+        return type ? cardDiscountName(type, state.statutoryConfig.rules[type]) : 'the statutory discount';
+      },
+    );
     if (choice) return choice;
-    if (state.client.kind === 'WALK_IN' || state.client.kind === 'UNSET') return 'A Senior/PWD sale needs the cardholder as the client.';
+    if (state.client.kind === 'WALK_IN' || state.client.kind === 'UNSET') return `A ${statutoryTypeLabel(state.statutory.type)} sale needs the cardholder as the client.`;
     if (state.client.kind === 'EXISTING') {
       const c = statutoryClientConflict(state.statutory, state.client.client);
       if (c) return c;

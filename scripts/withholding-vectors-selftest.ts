@@ -13,7 +13,7 @@ import type { PosClientCompany } from '@pos-api/contract';
 import { computeCartTotals, NO_DISCOUNT, type SaleTotals } from '../src/sale/totals';
 import { amountDueOf, billingPayload, billingProblem, withholdingFigures, type BillToDraft } from '../src/sale/billing';
 
-type Line = { quantity: number; unitPrice: number; isVatable: boolean; itemDiscountAmount?: number; isStatutory?: boolean };
+type Line = { quantity: number; unitPrice: number; isVatable: boolean; itemDiscountAmount?: number; isStatutory?: boolean; statutoryRate?: number; statutoryVatExempt?: boolean };
 type Vector = {
   name: string;
   type: WithholdingType;
@@ -53,6 +53,9 @@ for (const v of list) {
         unitPrice: l.unitPrice,
         isVatable: l.isVatable,
         isStatutory: l.isStatutory ?? false,
+        // BIR Phase 2: the card type's rate (fraction) and VAT treatment (NAAC / Solo Parent / Medal of Valor vectors).
+        ...(l.statutoryRate !== undefined ? { statutoryDiscountRate: l.statutoryRate } : {}),
+        ...(l.statutoryVatExempt !== undefined ? { statutoryVatExempt: l.statutoryVatExempt } : {}),
         itemDiscount: l.itemDiscountAmount ? { value: String(l.itemDiscountAmount), mode: 'amount' } : NO_DISCOUNT,
       })),
       v.sale.transactionDiscount > 0 ? { value: String(v.sale.transactionDiscount), mode: 'amount' } : NO_DISCOUNT,
