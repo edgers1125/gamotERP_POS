@@ -75,7 +75,7 @@ export function ClientSearch({ online, selectedId, onPick }: { online: boolean; 
       <TextField
         value={query}
         onChangeText={setQuery}
-        placeholder="Name, phone or Senior/PWD ID number"
+        placeholder="Name, phone or statutory ID number"
         autoCorrect={false}
         containerStyle={{ marginBottom: spacing.sm }}
       />

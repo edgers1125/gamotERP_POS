@@ -1,9 +1,11 @@
 // The sale's client — ONE form that looks like registering a new client, in this order:
-//   1. Senior Citizen / PWD discount (first, since the card identifies the person): None / Senior / PWD, then the card.
+//   1. Statutory discount (first, since the card identifies the person): None / the types the company offers (Senior, PWD,
+//      NAAC, Solo Parent, Medal of Valor), then the card (Solo Parent: booklet no. + children). This is card 0; further
+//      cards (several-per-sale companies) are added with ExtraCardDialog from the Sell screen.
 //   2. Client details: phone, then first / middle / last name.
 // Returning customers are recognised along the way (online, via GET /pos/clients — needs the network AND a live online
 // cashier token; see canSearchClients):
-//   · Senior/PWD ID number → the client on record with that exact card (fills the card from their record);
+//   · statutory ID number → the client on record with that exact card (fills the card from their record);
 //   · phone number → the client on record with that exact number (0917…, +63 917…, 917… and any spaces/dashes are the
 //     same number — `@shared/phone`);
 //   · names → up to 3 "Did you mean…?" suggestions to tap.
@@ -21,20 +23,25 @@ import { Banner, Button, TextField } from '../../ui/components';
 import { makeStyles, useThemeColors } from '../../ui/brandTheme';
 import { radius, spacing } from '../../ui/theme';
 import { RX_WALK_IN_REASON } from '../../sale/prescription';
-import { newClientProblem, newClientUuid, type SaleClient } from '../../sale/cart';
+import { lineEligibleFor, newClientProblem, newClientUuid, useCart, type CartLine, type SaleClient } from '../../sale/cart';
 import {
   EMPTY_STATUTORY,
   clientHasStatutory,
   clientName,
   clientStatutoryBlock,
   normalizeIdNumber,
+  offeredStatutoryTypes,
   statutoryClientConflict,
   statutoryProblem,
+  statutoryRuleText,
   statutoryTypeLabel,
+  type SoloParentChildDraft,
   type StatutoryDraft,
   type StatutoryType,
 } from '../../sale/statutory';
+import { statutoryIdHasExpiry, statutoryIdNeedsExpiry } from '@shared/statutory-rules';
 import { canSearchClients, clientLookupUnavailableReason } from './ClientSearch';
+import { EMPTY_CHILD, SoloParentFields } from './SoloParentFields';
 import { ErrorText, HintText, SectionTitle, Segmented, Sheet } from './ui';
 
 type CardChoice = 'NONE' | StatutoryType;
@@ -105,7 +112,7 @@ export function ClientDialog({
   visible,
   value,
   statutory,
-  eligibleCount,
+  lines,
   online,
   rxRequired,
   onSave,
@@ -114,8 +121,8 @@ export function ClientDialog({
   visible: boolean;
   value: SaleClient;
   statutory: StatutoryDraft | null;
-  /** Eligible (sc_pwd_eligible) lines in the cart. */
-  eligibleCount: number;
+  /** The cart's lines: how many each card type's discount can apply to (`lineEligibleFor`), and whether a prescription item is eligible. */
+  lines: Pick<CartLine, 'scPwdEligible' | 'soloParentEligible' | 'rxRequired'>[];
   online: boolean;
   /** The cart has a prescription item: the patient must be named — "No client details" is off. */
   rxRequired?: boolean;
@@ -124,12 +131,19 @@ export function ClientDialog({
 }) {
   const styles = useStyles();
   const theme = useThemeColors();
+  const config = useCart((s) => s.statutoryConfig);
+  const offered = offeredStatutoryTypes(config);
+  const eligibleFor = (type: StatutoryType) => lines.filter((l) => lineEligibleFor(type, l)).length;
+  const anyEligible = offered.some((t) => eligibleFor(t) > 0);
   const [noDetails, setNoDetails] = useState(false);
   const [card, setCard] = useState<CardChoice>('NONE');
   const [idNumber, setIdNumber] = useState('');
   const [idIssuer, setIdIssuer] = useState('');
   const [birthDate, setBirthDate] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
+  const [bookletNumber, setBookletNumber] = useState('');
+  const [children, setChildren] = useState<SoloParentChildDraft[]>([EMPTY_CHILD]);
+  const [rxInChildName, setRxInChildName] = useState(false);
   const [phone, setPhone] = useState('');
   const [first, setFirst] = useState('');
   const [middle, setMiddle] = useState('');
@@ -168,6 +182,9 @@ export function ClientDialog({
     setIdIssuer(statutory?.idIssuer ?? '');
     setBirthDate(statutory?.birthDate ?? '');
     setExpiryDate(statutory?.expiryDate ?? '');
+    setBookletNumber(statutory?.bookletNumber ?? '');
+    setChildren(statutory && statutory.children.length > 0 ? statutory.children : [EMPTY_CHILD]);
+    setRxInChildName(statutory?.rxInChildName ?? false);
     setTouched(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -175,10 +192,10 @@ export function ClientDialog({
   const cleanDate = (t: string) => t.replace(/[^0-9-]/g, '').slice(0, 10);
 
   // Uses a client on record: details filled and locked.
-  // · Matched by their Senior/PWD ID → the card section takes their record's card (type, and whatever the cashier hasn't
-  //   typed yet: issuer, birth date, PWD expiry). An expired PWD expiry shows as the form's error, to be updated.
-  // · Matched otherwise → a valid card on record pre-fills Senior/PWD when it's still None and an item qualifies. An
-  //   expired / undated PWD card is left for the cashier (the warning says why).
+  // · Matched by their statutory ID → the card section takes their record's card (type, and whatever the cashier hasn't
+  //   typed yet: issuer, birth date, expiry, booklet no.). An expired expiry shows as the form's error, to be updated.
+  // · Matched otherwise → a valid card on record pre-fills the discount when it's still None and an item qualifies. An
+  //   expired / undated card is left for the cashier (the warning says why).
   function pickClient(c: PosClient, via: MatchVia) {
     setMatched(c);
     setMatchedVia(via);
@@ -186,7 +203,7 @@ export function ClientDialog({
     setMiddle(c.middle_name ?? '');
     setLast(c.last_name ?? '');
     if (c.phone_number) setPhone(c.phone_number);
-    if (!clientHasStatutory(c) || eligibleCount === 0) {
+    if (!clientHasStatutory(c) || !config.rules[c.statutory_type].enabled || eligibleFor(c.statutory_type) === 0) {
       setCardFromRecord(false);
       return;
     }
@@ -195,14 +212,16 @@ export function ClientDialog({
       setCard(c.statutory_type);
       setIdIssuer((v) => v || (c.statutory_id_issuer ?? ''));
       setBirthDate((v) => v || (c.date_of_birth ?? '').slice(0, 10));
-      if (c.statutory_type === 'PWD') setExpiryDate((v) => v || recordExpiry);
+      if (statutoryIdHasExpiry(c.statutory_type)) setExpiryDate((v) => v || recordExpiry);
+      if (c.statutory_booklet_number) setBookletNumber((v) => v || (c.statutory_booklet_number ?? ''));
       setCardFromRecord(false); // the cashier typed this card — "Not them?" keeps it
-    } else if (card === 'NONE' && clientStatutoryBlock(c) === null) {
+    } else if (card === 'NONE' && clientStatutoryBlock(c, config) === null) {
       setCard(c.statutory_type);
       setIdNumber(c.statutory_id_number);
       setIdIssuer(c.statutory_id_issuer ?? '');
       setBirthDate((c.date_of_birth ?? '').slice(0, 10));
       setExpiryDate(recordExpiry);
+      setBookletNumber(c.statutory_booklet_number ?? '');
       setCardFromRecord(true);
     } else {
       setCardFromRecord(false);
@@ -223,6 +242,7 @@ export function ClientDialog({
       setIdIssuer('');
       setBirthDate('');
       setExpiryDate('');
+      setBookletNumber('');
     }
     setCardFromRecord(false);
   }
@@ -271,6 +291,8 @@ export function ClientDialog({
   // "Not them?" on an ID match: the server links a sale to whoever holds that card on record, so say so.
   const dismissedIdHolder = !matched && idOnRecord && dismissed.includes(idOnRecord.id) ? idOnRecord : null;
 
+  // The "prescription is in the child's name" attestation only matters when a prescription item is eligible.
+  const rxToggle = lines.some((l) => l.rxRequired && lineEligibleFor('SOLO_PARENT', l));
   const draft: StatutoryDraft | null =
     card === 'NONE'
       ? null
@@ -280,12 +302,15 @@ export function ClientDialog({
           idNumber,
           idIssuer,
           birthDate,
-          expiryDate: card === 'PWD' ? expiryDate : '',
+          expiryDate: statutoryIdHasExpiry(card) ? expiryDate : '',
+          bookletNumber: card === 'SOLO_PARENT' ? bookletNumber : '',
+          children: card === 'SOLO_PARENT' ? children : [],
+          rxInChildName: card === 'SOLO_PARENT' && rxToggle ? rxInChildName : false,
           firstName: first,
           middleName: middle,
           lastName: last,
         };
-  const cardBlock = matched && card === 'NONE' ? clientStatutoryBlock(matched) : null;
+  const cardBlock = matched && card === 'NONE' ? clientStatutoryBlock(matched, config) : null;
 
   const problem = useMemo(() => {
     if (noDetails) return null;
@@ -294,11 +319,11 @@ export function ClientDialog({
       if (p) return p;
     }
     if (draft) {
-      if (eligibleCount === 0) return 'No item in the cart qualifies for the Senior/PWD discount — choose None.';
+      if (eligibleFor(draft.type) === 0) return `No item in the cart qualifies for the ${statutoryTypeLabel(draft.type)} discount — choose None.`;
       return statutoryProblem(draft) ?? statutoryClientConflict(draft, matched);
     }
     return null;
-  }, [noDetails, matched, first, last, phone, draft, eligibleCount]);
+  }, [noDetails, matched, first, last, phone, draft, lines]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function save() {
     if (problem) {
@@ -336,10 +361,12 @@ export function ClientDialog({
   }
 
   const locked = matched !== null;
+  const cardRule = card === 'NONE' ? null : config.rules[card];
+  const cardCount = card === 'NONE' ? 0 : eligibleFor(card);
   const cardSummary =
-    card === 'NONE'
-      ? 'No Senior/PWD discount on this sale.'
-      : `${statutoryTypeLabel(card)} discount on this sale — 20% off ${eligibleCount} eligible item${eligibleCount === 1 ? '' : 's'}, VAT-exempt.`;
+    card === 'NONE' || !cardRule
+      ? 'No statutory discount on this sale.'
+      : `${statutoryTypeLabel(card)} discount on this sale — ${statutoryRuleText(cardRule).split(' · ')[0]} off ${cardCount} eligible item${cardCount === 1 ? '' : 's'}, ${cardRule.vatExempt ? 'VAT-exempt' : 'VAT applies'}.`;
 
   return (
     <Sheet
@@ -365,7 +392,7 @@ export function ClientDialog({
 
       {noDetails ? (
         <View>
-          <Banner kind="info" message="Walk-in client — no contact details are recorded, and no Senior/PWD discount." />
+          <Banner kind="info" message="Walk-in client — no contact details are recorded, and no statutory discount." />
           <SectionTitle>Name (optional)</SectionTitle>
           <View style={styles.row}>
             <TextField label="First name" value={first} onChangeText={setFirst} containerStyle={styles.cell} maxLength={100} />
@@ -379,30 +406,25 @@ export function ClientDialog({
             <Banner
               kind="info"
               title="Returning clients can’t be looked up"
-              message={`${unavailable} The sale is still linked to their record when the device checks in, by phone number or Senior/PWD ID.`}
+              message={`${unavailable} The sale is still linked to their record when the device checks in, by phone number or statutory ID.`}
               style={styles.banner}
             />
           ) : null}
 
-          {/* 1. Senior Citizen / PWD discount — part of this form, first: the card identifies the person. */}
+          {/* 1. Statutory discount — part of this form, first: the card identifies the person. */}
           <View style={[styles.scPanel, card !== 'NONE' && styles.scPanelOn]}>
-            <Text style={styles.scTitle}>Senior Citizen / PWD discount</Text>
-            {eligibleCount === 0 ? (
+            <Text style={styles.scTitle}>Statutory discount</Text>
+            {!anyEligible ? (
               <Text style={styles.scExplain}>
-                20% off eligible items, VAT-exempt — but no item in the cart qualifies, so it can’t be used on this sale.
+                Senior Citizen, PWD and the other statutory discounts apply to eligible items — but no item in the cart qualifies, so none can be used on this sale.
               </Text>
             ) : (
               <>
                 <Text style={styles.scExplain}>
-                  20% off eligible items, VAT-exempt. Choose the card type first, then enter the ID — the discount applies to
-                  this sale.
+                  Choose the card type first, then enter the ID — the discount applies to the eligible items on this sale.
                 </Text>
                 <Segmented<CardChoice>
-                  options={[
-                    { value: 'NONE', label: 'None' },
-                    { value: 'SENIOR', label: 'Senior Citizen' },
-                    { value: 'PWD', label: 'PWD' },
-                  ]}
+                  options={[{ value: 'NONE', label: 'None' }, ...offered.map((t) => ({ value: t, label: statutoryTypeLabel(t) }))]}
                   value={card}
                   onChange={(v) => {
                     setCard(v);
@@ -413,6 +435,9 @@ export function ClientDialog({
                   {card !== 'NONE' ? '✓ ' : ''}
                   {cardSummary}
                 </Text>
+                {offered.length > 0 ? (
+                  <Text style={styles.scRules}>{offered.map((t) => `${statutoryTypeLabel(t)}: ${statutoryRuleText(config.rules[t])}`).join('   ·   ')}</Text>
+                ) : null}
                 {card !== 'NONE' ? (
                   <>
                     <View style={[styles.row, { marginTop: spacing.sm }]}>
@@ -426,7 +451,7 @@ export function ClientDialog({
                         containerStyle={styles.cell}
                         editable={!(locked && matchedVia === 'ID')}
                       />
-                      <TextField label="Issued by (LGU / OSCA / NCDA)" value={idIssuer} onChangeText={setIdIssuer} maxLength={100} containerStyle={styles.cell} />
+                      <TextField label="Issued by (LGU / OSCA / NCDA / DSWD…)" value={idIssuer} onChangeText={setIdIssuer} maxLength={100} containerStyle={styles.cell} />
                     </View>
                     {idNote ? <HintText>{idNote}</HintText> : null}
                     <View style={styles.row}>
@@ -438,9 +463,9 @@ export function ClientDialog({
                         keyboardType="numbers-and-punctuation"
                         containerStyle={styles.cell}
                       />
-                      {card === 'PWD' ? (
+                      {statutoryIdHasExpiry(card) ? (
                         <TextField
-                          label="ID expiry date *"
+                          label={statutoryIdNeedsExpiry(card) ? 'Expiry date *' : 'Expiry date (optional)'}
                           value={expiryDate}
                           onChangeText={(t) => setExpiryDate(cleanDate(t))}
                           placeholder="YYYY-MM-DD"
@@ -451,6 +476,17 @@ export function ClientDialog({
                         <View style={styles.cell} />
                       )}
                     </View>
+                    {card === 'SOLO_PARENT' ? (
+                      <SoloParentFields
+                        bookletNumber={bookletNumber}
+                        children={children}
+                        rxInChildName={rxInChildName}
+                        showRxToggle={rxToggle}
+                        onBookletNumber={setBookletNumber}
+                        onChildren={setChildren}
+                        onRxInChildName={setRxInChildName}
+                      />
+                    ) : null}
                     {dismissedIdHolder ? (
                       <Banner
                         kind="warning"
@@ -472,7 +508,7 @@ export function ClientDialog({
               <View style={{ flex: 1 }}>
                 <Text style={styles.matchLabel}>
                   Returning client
-                  {matchedVia === 'ID' ? ' · found by Senior/PWD ID' : matchedVia === 'PHONE' ? ' · found by phone number' : ''}
+                  {matchedVia === 'ID' ? ' · found by statutory ID' : matchedVia === 'PHONE' ? ' · found by phone number' : ''}
                 </Text>
                 <Text style={styles.matchName}>
                   {clientName(matched)}
@@ -534,7 +570,7 @@ const useStyles = makeStyles((c, t) => ({
   skipNote: { textDecorationLine: 'none', textAlign: 'right' },
   skip: { ...t.caption, fontSize: 12, color: c.muted, textDecorationLine: 'underline' },
   banner: { marginBottom: spacing.sm },
-  // The Senior/PWD discount block: a tinted panel so it reads as one part of the form, outlined in primary once chosen.
+  // The statutory discount block: a tinted panel so it reads as one part of the form, outlined in primary once chosen.
   scPanel: {
     padding: spacing.md,
     marginTop: spacing.xs,
@@ -546,6 +582,7 @@ const useStyles = makeStyles((c, t) => ({
   scPanelOn: { borderColor: c.primary },
   scTitle: { ...t.heading, color: c.primary },
   scExplain: { ...t.caption, color: c.text, marginTop: 2, marginBottom: spacing.sm },
+  scRules: { ...t.caption, fontSize: 12, color: c.muted, marginTop: spacing.xs },
   scStatus: { ...t.caption, marginTop: spacing.xs },
   scStatusOn: { ...t.bodyStrong, fontSize: 14, color: c.primary },
   match: {

@@ -1,5 +1,5 @@
 // The till (landscape tablet): pricing channel + Sold By (picked by the cashier every time, then sticky) on top, the cached catalog / search / scanner on the left,
-// the cart on the right with the client, Senior/PWD and sale discount, the totals (shared pricing code) and Charge.
+// the cart on the right with the client, statutory discount card(s) and sale discount, the totals (shared pricing code) and Charge.
 // Selling is disabled while the sync engine reports a blockedReason (offline limits reached, device revoked, update
 // required) or no cashier is signed in.
 // Layout: side by side when the window is ≥ 720dp wide (landscape tablet), stacked (search above cart) when narrower
@@ -18,17 +18,18 @@ import { AUTO_TIME_OFF_MESSAGE } from '../db/policy';
 import { autoTime } from '../device/autoTime';
 import { useSyncStatus } from '../sync/syncEngine';
 import { cartNeedsRx, RX_WALK_IN_REASON } from '../sale/prescription';
-import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, newClientUuid, rxLinesOf, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
+import { cartProblem, cartTotals, chargedLineOf, displayPhone, isStatutoryLine, lineCardOptions, lineEligibleFor, lineStatutoryType, multiCard, newClientUuid, rxLinesOf, saleCards, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
 import { promosOf } from '../sale/promos';
 import { pricesIncludeVatOf } from '../sale/totals';
 import { saleClientName } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
 import type { SaleStackParamList } from '../sale/navigation';
-import { clientHasStatutory, clientStatutoryBlock, draftFromClient, statutoryConfigOf, statutoryTypeLabel } from '../sale/statutory';
+import { clientHasStatutory, clientStatutoryBlock, draftFromClient, offeredStatutoryTypes, ratePercentText, statutoryConfigOf, statutoryHolderName, statutoryTypeLabel, type StatutoryDraft } from '../sale/statutory';
 import { usePosData, useStockHint } from '../sale/usePosData';
 import { CartLineRow } from '../components/sale/CartLineRow';
 import { ClientDialog } from '../components/sale/ClientDialog';
 import { DiscountDialog } from '../components/sale/DiscountDialog';
+import { ExtraCardDialog } from '../components/sale/ExtraCardDialog';
 import { ProductSearch } from '../components/sale/ProductSearch';
 import { SoldByDialog } from '../components/sale/SoldByDialog';
 import { TotalsSummary } from '../components/sale/TotalsSummary';
@@ -54,6 +55,8 @@ export function SellScreen({ navigation }: SellScreenProps) {
   const [dialog, setDialog] = useState<null | 'client' | 'txDiscount' | 'soldBy' | { lineSku: number }>(null);
   // The existing client whose card the cashier switched off (buying for someone else) — not re-applied for them.
   const [statutoryOffFor, setStatutoryOffFor] = useState<number | null>(null);
+  // The extra statutory card dialog: a new card ('new') or the extra card at that index.
+  const [extraCard, setExtraCard] = useState<null | 'new' | number>(null);
   const { width } = useWindowDimensions();
   const wide = width >= WIDE_MIN_WIDTH;
   // Cart panel height vs. the client/totals block: decides whether that block is pinned or scrolls with the lines.
@@ -134,7 +137,9 @@ export function SellScreen({ navigation }: SellScreenProps) {
   const drawer = useDrawerGate();
   const needsRx = cartNeedsRx(rxLinesOf(cart));
   const problem = blocked ?? drawer.problem ?? data.error ?? cartProblem(cart, totals);
-  const eligibleCount = cart.lines.filter((l) => l.scPwdEligible).length;
+  // How many items the client's card on record (if any) could apply to — decides the auto-apply below.
+  const recordCardType = cart.client.kind === 'EXISTING' ? cart.client.client.statutory_type : null;
+  const eligibleCount = recordCardType ? cart.lines.filter((l) => lineEligibleFor(recordCardType, l)).length : 0;
   const itemCount = cart.lines.reduce((s, l) => s + l.quantity, 0);
   const soldByName = staff.find((s) => s.id === cart.soldById)?.name ?? 'Choose who sold it';
   const clientName = saleClientName(cart);
@@ -146,26 +151,32 @@ export function SellScreen({ navigation }: SellScreenProps) {
         : cart.client.kind === 'EXISTING'
           ? `${clientName ?? 'Client'} · returning`
           : `${clientName ?? 'New client'} · new${cart.client.phone ? ` · ${displayPhone(cart.client.phone)}` : ''}`;
-  // Senior/PWD is chosen inside the client form (first section) — shown with the client, not as its own button.
-  const statutoryLabel = cart.statutory ? `${statutoryTypeLabel(cart.statutory.type)} ✓ 20% off eligible items` : null;
+  // The statutory discount is chosen inside the client form (first section) — shown with the client, not as its own button.
+  // Several cards (company allows it) list one row each: "Solo Parent ✓ 10% off eligible items".
+  const cards = saleCards(cart);
+  const statutoryLabels = cards.map((c) => `${statutoryTypeLabel(c.type)} ✓ ${ratePercentText(cart.statutoryConfig.rules[c.type].ratePercent)} off eligible items`);
+  // Further cards: only when the company allows several per sale, the client's card is on, and a type is still free.
+  const freeTypes = offeredStatutoryTypes(cart.statutoryConfig).filter((t) => !cards.some((c) => c.type === t));
+  const canAddCard = !cart.statutoryConfig.oneTypePerSale && cart.statutory !== null && freeTypes.length > 0;
+  const editingExtra = typeof extraCard === 'number' ? (cart.extraCards[extraCard] ?? null) : null;
   const existingClient = cart.client.kind === 'EXISTING' ? cart.client.client : null;
-  // A card on record that can't be applied as-is (expired or undated PWD ID) — said once, next to the client.
-  const cardBlock = existingClient && !cart.statutory ? clientStatutoryBlock(existingClient) : null;
+  // A card on record that can't be applied as-is (expired or undated ID, Solo Parent needs the child) — said once, next to the client.
+  const cardBlock = existingClient && !cart.statutory ? clientStatutoryBlock(existingClient, cart.statutoryConfig) : null;
 
-  // Picking an existing client with a valid Senior/PWD card on record switches the discount on, pre-filled — also when
-  // the eligible items are added after the client. A Senior ID never expires; an expired PWD ID is never applied.
+  // Picking an existing client with a valid statutory card on record switches the discount on, pre-filled — also when
+  // the eligible items are added after the client. An expired ID is never applied (a Solo Parent card always opens the form).
   useEffect(() => {
     if (!existingClient || cart.statutory || eligibleCount === 0 || statutoryOffFor === existingClient.id) return;
-    if (!clientHasStatutory(existingClient) || clientStatutoryBlock(existingClient) !== null) return;
+    if (!clientHasStatutory(existingClient) || clientStatutoryBlock(existingClient, cart.statutoryConfig) !== null) return;
     cart.setStatutory(draftFromClient(existingClient));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingClient, cart.statutory, eligibleCount, statutoryOffFor]);
+  }, [existingClient, cart.statutory, eligibleCount, statutoryOffFor, cart.statutoryConfig]);
   const editingLine = dialog && typeof dialog === 'object' ? cart.lines.find((l) => l.skuId === dialog.lineSku) : undefined;
   // The existing rules, said where the sale discount is entered (cart.ts enforces them; this only shows them).
   const saleDiscountBlocked = blocked
     ? 'Selling is paused.'
     : cart.statutory !== null
-      ? 'A transaction discount can’t be combined with the Senior/PWD discount.'
+      ? 'A transaction discount can’t be combined with a statutory discount.'
       : cart.lines.length === 0
         ? 'Add an item first.'
         : null;
@@ -192,6 +203,9 @@ export function SellScreen({ navigation }: SellScreenProps) {
       onPromoChoice={(choice) => cart.setPromoChoice(line.skuId, choice)}
       itemDiscountAmount={totals.itemDiscountAmounts[index] ?? 0}
       statutory={isStatutoryLine(cart, line)}
+      cardType={lineStatutoryType(cart, line)}
+      cardOptions={multiCard(cart) ? lineCardOptions(cart, line) : []}
+      onCardChoice={(choice) => cart.setLineCard(line.skuId, choice)}
       available={cart.stock[line.skuId]}
       onQuantity={(q) => cart.setQuantity(line.skuId, q)}
       onDiscount={() => setDialog({ lineSku: line.skuId })}
@@ -203,7 +217,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
   // The client, the totals (with the sale-discount row, where it's added/edited) and what's still missing.
   const summary = (
     <View onLayout={(e) => setSummaryH(e.nativeEvent.layout.height)}>
-      {/* The sale's client — after the items, before Senior/PWD and discounts. Required, like the web: the Charge
+      {/* The sale's client — after the items, before the statutory discount and discounts. Required, like the web: the Charge
           button stays off until a client is chosen or "No client details" is tapped explicitly. */}
       <View style={[styles.clientBar, cart.client.kind === 'UNSET' && styles.clientBarRequired]}>
         <View style={styles.clientInfo}>
@@ -211,7 +225,11 @@ export function SellScreen({ navigation }: SellScreenProps) {
           <Text style={[styles.clientName, cart.client.kind === 'UNSET' && styles.clientNameRequired]} numberOfLines={1}>
             {clientLabel ?? 'Add the client for this sale'}
           </Text>
-          {statutoryLabel ? <Text style={styles.clientStatutory}>{statutoryLabel}</Text> : null}
+          {statutoryLabels.map((l) => (
+            <Text key={l} style={styles.clientStatutory}>
+              {l}
+            </Text>
+          ))}
         </View>
         <View style={styles.clientActions}>
           <Button
@@ -236,6 +254,19 @@ export function SellScreen({ navigation }: SellScreenProps) {
         </View>
       </View>
       {cardBlock ? <Banner kind="warning" message={cardBlock} style={styles.cardBanner} /> : null}
+      {cart.extraCards.map((card, i) => (
+        <View key={card.type} style={styles.extraCard}>
+          <Text style={styles.extraCardText} numberOfLines={2}>
+            {statutoryTypeLabel(card.type)} · ID {card.idNumber} · {statutoryHolderName(card)}
+          </Text>
+          <Button title="Edit" variant="secondary" compact disabled={!!blocked} onPress={() => setExtraCard(i)} />
+        </View>
+      ))}
+      {canAddCard ? (
+        <View style={styles.addCard}>
+          <Button title="+ Add another card" variant="secondary" compact disabled={!!blocked} onPress={() => setExtraCard('new')} />
+        </View>
+      ) : null}
 
       <View style={styles.totals}>
         <TotalsSummary
@@ -334,16 +365,29 @@ export function SellScreen({ navigation }: SellScreenProps) {
         visible={dialog === 'client'}
         value={cart.client}
         statutory={cart.statutory}
-        eligibleCount={eligibleCount}
+        lines={cart.lines}
         online={sync.online}
         rxRequired={needsRx}
         onClose={() => setDialog(null)}
         onSave={(client, statutory) => {
           cart.setClient(client);
           cart.setStatutory(statutory);
+          // A further card of the same type as the client's would double up — the client's card wins.
+          if (statutory && cart.extraCards.some((c) => c.type === statutory.type)) cart.setExtraCards(cart.extraCards.filter((c) => c.type !== statutory.type));
           // "None" chosen for a client whose card is on record (buying for someone else) — don't re-apply it.
           setStatutoryOffFor(client.kind === 'EXISTING' && !statutory && clientHasStatutory(client.client) ? client.client.id : null);
         }}
+      />
+      <ExtraCardDialog
+        visible={extraCard !== null}
+        card={editingExtra}
+        availableTypes={freeTypes}
+        lines={cart.lines}
+        onSave={(draft: StatutoryDraft) =>
+          cart.setExtraCards(typeof extraCard === 'number' ? cart.extraCards.map((c, i) => (i === extraCard ? draft : c)) : [...cart.extraCards, draft])
+        }
+        onRemove={typeof extraCard === 'number' ? () => cart.setExtraCards(cart.extraCards.filter((_, i) => i !== extraCard)) : undefined}
+        onClose={() => setExtraCard(null)}
       />
       <DiscountDialog
         visible={dialog === 'txDiscount'}
@@ -354,7 +398,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
         reason={cart.txDiscountReason}
         notes={[
           'Taken off the whole sale and shared across its items.',
-          'A transaction discount can’t be combined with the Senior/PWD discount.',
+          'A transaction discount can’t be combined with a statutory discount.',
         ]}
         onSave={(d, reason) => cart.setTxDiscount(d, reason)}
         onClose={() => setDialog(null)}
@@ -364,7 +408,7 @@ export function SellScreen({ navigation }: SellScreenProps) {
         title={editingLine ? `Item discount · ${editingLine.name}` : 'Item discount'}
         base={editingLine ? editingLine.quantity * shownPrice(cart, editingLine, chargedLineOf(cart, editingLine).unitPrice) : 0}
         baseLabel={editingLine ? `Line subtotal (${editingLine.quantity} × ${formatPeso(shownPrice(cart, editingLine, chargedLineOf(cart, editingLine).unitPrice))})` : 'Line subtotal'}
-        notes={editingLine?.scPwdEligible ? ['Senior/PWD-eligible item: applying Senior/PWD to this sale replaces this discount with the 20%.'] : undefined}
+        notes={editingLine?.scPwdEligible || editingLine?.soloParentEligible ? ['Statutory-eligible item: applying a statutory discount to this sale replaces this discount with the card’s discount.'] : undefined}
         value={editingLine?.discount ?? { value: '', mode: 'amount' }}
         onSave={(d) => editingLine && cart.setLineDiscount(editingLine.skuId, d)}
         onClose={() => setDialog(null)}
@@ -444,6 +488,9 @@ const useStyles = makeStyles((c, t) => ({
   clientStatutory: { ...t.caption, fontFamily: t.bodyStrong.fontFamily, color: c.primary },
   lines: { flex: 1 },
   empty: { ...t.body, color: c.muted, textAlign: 'center', paddingVertical: spacing.xxl },
+  extraCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
+  extraCardText: { ...t.caption, flex: 1, color: c.primary },
+  addCard: { alignItems: 'flex-start', marginTop: spacing.xs },
   cardBanner: { marginTop: spacing.sm },
   totals: { marginTop: spacing.sm, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: c.border },
   problem: { ...t.caption, color: c.danger, marginBottom: spacing.sm },

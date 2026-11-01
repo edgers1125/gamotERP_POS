@@ -28,11 +28,11 @@ Core rules: ../../CLAUDE.md (read first). Paths are relative to the repo root (g
   match the promos at `soldAt`). **Clock:** the DEVICE clock, and that same instant is the sale's `sold_at` — the server
   judges the promo at `sold_at`, so both agree; since 2026-10-12 it is device clock + server offset (`stampClock()`, same value as the
   sale's `sold_at`); a wrong clock is the server's CLOCK_DRIFT flag, a promo outside its window PRICE_MISMATCH (recorded as charged).
-- **Senior/PWD + promo item (decision 6):** each eligible promo line shows both amounts (`compareScPwd`: "Promo …" vs
-  "Senior/PWD 20%"), the cheaper one for the customer marked "Better for the customer", and "By law the customer gets
-  the better of the two — the promo or the Senior/PWD 20% — never both". **No default**; Charge stays off until each is
-  chosen (`promoChoiceProblem` in `cartProblem`). PROMO → promo price, `statutoryDiscountRate: 0` (VAT-exempt, no 20 %);
-  SCPWD → regular price + 20 %. A different promo / price on the line clears the choice.
+- **Statutory card + promo item (decision 6; any card type since app 1.6.0):** each statutory promo line shows both amounts (`scPwdComparison(line, <card rate>)` — the shared `compareScPwd` at 20 %, the same centavo maths at another rate: "Promo …" vs
+  "<card> <rate>" e.g. "Solo Parent 10%"), the cheaper one for the customer marked "Better for the customer", and "By law the customer gets
+  the better of the two — the promo or the statutory discount — never both". **No default**; Charge stays off until each is
+  chosen (`promoChoiceProblem` in `cartProblem`). PROMO → promo price, `statutoryDiscountRate: 0` (the card type's VAT treatment, no rate off);
+  SCPWD → regular price + the card's rate. A different promo / price on the line clears the choice.
 - **Payload** (`SaleLinePayload`, signed as usual): `unit_price` = as charged; a promo line adds `promo_id`,
   `regular_unit_price`, `promo_vs_scpwd` (the choice on a Senior/PWD line — SCPWD still sends the promo it passed over —
   else null). Lines without a promo send none of them (older servers unaffected).

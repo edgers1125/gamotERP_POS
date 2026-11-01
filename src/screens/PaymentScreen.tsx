@@ -18,7 +18,7 @@ import { useCashier } from '../auth/cashierSession';
 import { stampClock } from '../device/clockStamp';
 import { customerDisplay } from '../display/customerDisplay';
 import { useSyncStatus } from '../sync/syncEngine';
-import { cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, rxLinesOf, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
+import { cardDiscountName, cartProblem, cartTotals, chargedLineOf, discountNeedsApproval, isStatutoryLine, lineStatutoryType, rxLinesOf, saleCards, shownPrice, statutoryDiscountRows, useCart } from '../sale/cart';
 import { amountDueOf, withholdingFigures } from '../sale/billing';
 import { checkCartPrescription, completeSale, PromoChangedError, saleClientName, type Approval } from '../sale/checkout';
 import { formatPeso } from '../sale/money';
@@ -153,11 +153,11 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
       <View style={styles.meta}>
         <Text style={styles.metaText}>Client: {saleClientName(cart) ?? 'Walk-in'}</Text>
         {cart.billTo ? <Text style={styles.metaText}>Billed to: {cart.billTo.company.name}</Text> : null}
-        {cart.statutory ? (
-          <Text style={styles.metaText}>
-            {statutoryTypeLabel(cart.statutory.type)} ID {cart.statutory.idNumber}
+        {saleCards(cart).map((card) => (
+          <Text key={card.type} style={styles.metaText}>
+            {statutoryTypeLabel(card.type)} ID {card.idNumber}
           </Text>
-        ) : null}
+        ))}
         {cart.rx ? <Text style={styles.metaText}>{rxSummary}</Text> : null}
         <Text style={styles.metaText}>Cashier: {cashier?.name ?? '—'}</Text>
         <Text style={styles.metaText}>Sold by: {data.bootstrap?.sales_staff.find((s) => s.id === cart.soldById)?.name ?? '—'}</Text>
@@ -197,6 +197,8 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
             {cart.lines.map((l, idx) => {
               const charged = chargedLineOf(cart, l);
               const choice = isStatutoryLine(cart, l) && l.promo ? l.promoChoice : null;
+              const cardType = lineStatutoryType(cart, l);
+              const cardName = cardType ? cardDiscountName(cardType, cart.statutoryConfig.rules[cardType]) : 'The statutory discount';
               return (
               <View key={l.skuId} style={styles.orderLine}>
                 <View style={styles.flex}>
@@ -206,10 +208,10 @@ export function PaymentScreen({ navigation }: PaymentScreenProps) {
                   {charged.promoApplied && l.promo ? (
                     <Text style={styles.orderPromo}>
                       Promo: {l.promo.name} · <Text style={styles.struck}>{formatPeso(shownPrice(cart, l, l.unitPrice))}</Text> {formatPeso(shownPrice(cart, l, charged.unitPrice))} each
-                      {choice === 'PROMO' ? ' · chosen over SC/PWD 20%' : ''}
+                      {choice === 'PROMO' ? ` · chosen over ${cardName}` : ''}
                     </Text>
                   ) : null}
-                  {choice === 'SCPWD' && l.promo ? <Text style={styles.orderPromo}>SC/PWD 20% chosen over the promo “{l.promo.name}”</Text> : null}
+                  {choice === 'SCPWD' && l.promo ? <Text style={styles.orderPromo}>{cardName} chosen over the promo “{l.promo.name}”</Text> : null}
                 </View>
                 <View style={styles.orderAmounts}>
                   <Text style={styles.orderAmount}>{formatPeso(totals.lines[idx]?.lineSubtotal ?? 0)}</Text>
